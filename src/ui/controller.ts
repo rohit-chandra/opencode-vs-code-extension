@@ -13,7 +13,7 @@ import type { ProviderConfig } from '../engines/direct/presets';
 import type { AvatarStyle, HostToWebview, ViewState, WebviewToHost } from '../shared/protocol';
 import { applyMessageEvent, messageText } from '../shared/reducer';
 import { ENGINE_LABELS } from '../shared/types';
-import type { Attachment, ChatMessage, EngineEvent, EngineId, ModelRef, SessionInfo } from '../shared/types';
+import type { Attachment, AuthStatus, ChatMessage, EngineEvent, EngineId, ModelRef, SessionInfo } from '../shared/types';
 
 export interface PickItem<T> {
   label: string;
@@ -67,6 +67,9 @@ export class ChatController {
   private webviewReady = false;
   /** The user pressed stop during the running turn. */
   private stopRequested = false;
+  /** Engine whose sign-in was started in a terminal and is being waited for. */
+  private signInPending: EngineId | undefined;
+  private signInTimer: ReturnType<typeof setTimeout> | undefined;
   /** Renderer the webview's companion is using, once it has mounted. */
   avatarRenderer: 'webgl' | '2d' | undefined;
 
@@ -99,6 +102,7 @@ export class ChatController {
       trusted: host.workspaceTrusted(),
       canRetry: false,
       recentModels: [],
+      auth: undefined,
       panel: { name: 'none', nonce: 0 },
       notice: undefined,
       loading: true,
@@ -131,10 +135,10 @@ export class ChatController {
     const status = await engine.start();
     if (run !== this.activation) return;
     if (status.state !== 'ready') {
-      this.set({ loading: false, sessions: [], sessionId: undefined, messages: [], providers: [], agents: [], mcp: [], commands: mergeCommands([]), model: undefined, agent: undefined });
+      this.set({ loading: false, sessions: [], sessionId: undefined, messages: [], providers: [], agents: [], mcp: [], commands: mergeCommands([]), model: undefined, agent: undefined, auth: undefined });
       return;
     }
-    await Promise.all([this.refreshCatalog(), this.refreshMcp(), this.refreshSessions()]);
+    await Promise.all([this.refreshCatalog(), this.refreshMcp(), this.refreshSessions(), this.refreshAuth()]);
     if (run !== this.activation) return;
     const last = this.host.state.get<string>(`session.${engine.id}`);
     if (last && this.state.sessions.some((s) => s.id === last)) await this.openSession(last);
@@ -147,6 +151,7 @@ export class ChatController {
     for (const s of this.subscriptions) s.dispose();
     for (const t of this.timers.values()) clearTimeout(t);
     if (this.eventTimer) clearTimeout(this.eventTimer);
+    this.stopSignInWait();
   }
 
   private debounce(key: string, ms: number, fn: () => void): void {
@@ -249,6 +254,20 @@ export class ChatController {
     if (engine === this.engine) this.set({ sessions });
   }
 
+  /** Ask the active engine's CLI whether it is signed in (Claude Code, Codex). */
+  private async refreshAuth(): Promise<AuthStatus | undefined> {
+    const engine = this.engine;
+    const account = engine.account;
+    if (!account || engine.status().state !== 'ready') {
+      if (this.state.auth) this.set({ auth: undefined });
+      return undefined;
+    }
+    const status = await account.status().catch((e): AuthStatus => (this.host.log.warn(`auth status: ${errorMessage(e)}`), { engine: engine.id, mode: account.mode(), signedIn: undefined }));
+    if (engine !== this.engine) return undefined;
+    this.set({ auth: { ...status, pending: this.signInPending === engine.id || undefined } });
+    return status;
+  }
+
   private pushUsage(): void {
     this.set({
       usage: this.ledger.summary(40),
@@ -301,6 +320,8 @@ export class ChatController {
         const canRetry = ended ? this.stopRequested || (last?.role === 'assistant' && !!last.error) : event.activity === 'idle' ? this.state.canRetry : false;
         if (ended) this.stopRequested = false;
         this.set({ activity: event.activity, activityDetail: event.detail, canRetry });
+        // A failed reply may mean the login expired: show the sign-in prompt if so.
+        if (ended && last?.role === 'assistant' && last.error && this.engine.account) void this.refreshAuth();
         return;
       }
       case 'message.updated':
@@ -406,7 +427,8 @@ export class ChatController {
 
   async setEngine(engine: EngineId): Promise<void> {
     if (!this.engines.has(engine) || engine === this.state.engine) return;
-    this.set({ engine, capabilities: this.engines.get(engine)!.capabilities, sessions: [], sessionId: undefined, messages: [], permissions: [], questions: [], providers: [], agents: [], mcp: [], model: undefined, agent: undefined, activity: 'idle', sessionUsage: undefined, commands: mergeCommands([]), canRetry: false, recentModels: [] });
+    this.set({ engine, capabilities: this.engines.get(engine)!.capabilities, sessions: [], sessionId: undefined, messages: [], permissions: [], questions: [], providers: [], agents: [], mcp: [], model: undefined, agent: undefined, activity: 'idle', sessionUsage: undefined, commands: mergeCommands([]), canRetry: false, recentModels: [], auth: undefined });
+    this.stopSignInWait();
     await this.host.state.update('engine', engine);
     await this.activate();
   }
@@ -535,6 +557,11 @@ export class ChatController {
       this.notify('warn', 'Still working on the previous message. Stop it first (/stop) or wait.');
       return;
     }
+    if (engine.account && this.state.auth?.signedIn === false) {
+      const account = engine.account;
+      this.notify('warn', account.mode() === 'apiKey' ? `Add an API key for ${ENGINE_LABELS[engine.id]} first, or sign in with your ${account.accountName} account (/login).` : `Sign in with your ${account.accountName} account first (/login).`);
+      return;
+    }
     if (!this.state.model) await this.refreshCatalog();
     if (!this.state.model) {
       this.notify('warn', engine.id === 'direct' || engine.id === 'opencode' ? 'No model available. Use /providers to connect a provider, then pick a model.' : 'No model available for this engine.');
@@ -607,6 +634,8 @@ export class ChatController {
         return this.pickFiles();
       case 'providers':
         return this.manageProviders();
+      case 'login':
+        return this.accountMenu();
       case 'model': {
         if (!args) return this.openPanel('models');
         const q = args.toLowerCase();
@@ -758,6 +787,7 @@ export class ChatController {
   /* ------------------------------------------------------------ providers */
 
   async manageProviders(): Promise<void> {
+    if (this.engine.account) return this.accountMenu();
     if (this.state.engine === 'opencode' && this.engine.status().state === 'ready') {
       const choice = await this.host.pick(
         [
@@ -776,6 +806,127 @@ export class ChatController {
       if (choice !== 'direct') return;
     }
     await this.manageDirectProviders();
+  }
+
+  /* -------------------------------------------------------------- account */
+
+  /** Sign-in options of the active engine; engines without their own account show the provider options. */
+  async accountMenu(): Promise<void> {
+    const engine = this.engine;
+    const account = engine.account;
+    if (!account) {
+      if (engine.id === 'opencode' && engine.status().state === 'ready') return this.manageProviders();
+      if (engine.id === 'direct') return this.manageDirectProviders();
+      return this.notify('info', `${ENGINE_LABELS[engine.id]} signs in through VS Code. Use /engine to pick another engine.`);
+    }
+    const status = (await this.refreshAuth()) ?? this.state.auth;
+    const mode = account.mode();
+    const hasKey = !!(await this.host.secrets.get(account.secretKey));
+    const plan = engine.id === 'claude-code' ? 'Claude Pro or Max plan' : 'ChatGPT Plus, Pro or Team plan';
+    type Action = 'signIn' | 'device' | 'apiKey' | 'useAccount' | 'removeKey' | 'signOut';
+    const items: PickItem<Action>[] = [
+      { label: `$(sign-in) Sign in with your ${account.accountName} account`, description: mode === 'subscription' && status?.signedIn && status.billing !== 'apiKey' ? 'signed in' : 'recommended', detail: `Uses your ${plan}. No per-token API charges. Opens the browser.`, value: 'signIn' },
+    ];
+    if (engine.id === 'codex') items.push({ label: '$(device-mobile) Sign in with a device code', detail: 'For remote, SSH, WSL or container setups where the browser cannot reach this machine.', value: 'device' });
+    if (mode === 'apiKey') items.push({ label: `$(account) Use my ${account.accountName} account again`, detail: 'Stop using the API key and bill your subscription.', value: 'useAccount' });
+    items.push({ label: `$(key) ${hasKey ? 'Replace the API key' : 'Use an API key instead'}`, description: mode === 'apiKey' ? 'in use' : undefined, detail: `Billed per token by ${engine.id === 'claude-code' ? 'Anthropic' : 'OpenAI'}, usually far more than a subscription. Stored in VS Code Secret Storage.`, value: 'apiKey' });
+    if (hasKey) items.push({ label: '$(trash) Remove the stored API key', value: 'removeKey' });
+    if (mode === 'subscription' && status?.signedIn) items.push({ label: `$(sign-out) Sign out of ${account.accountName}`, detail: 'Signs the CLI out on this computer (also outside VS Code).', value: 'signOut' });
+    const now = status?.signedIn ? status.label ?? 'signed in' : status?.signedIn === false ? 'not signed in' : 'sign-in status unknown';
+    const action = await this.host.pick(items, { title: `${ENGINE_LABELS[engine.id]}: ${now}` });
+    switch (action) {
+      case 'signIn':
+        return this.signIn(false);
+      case 'device':
+        return this.signIn(true);
+      case 'apiKey':
+        return this.useApiKey();
+      case 'useAccount':
+        await this.host.updateConfig(account.modeSetting, 'subscription');
+        await this.refreshAuth();
+        if (this.state.auth?.signedIn === false) return this.signIn(false);
+        return this.notify('info', `${ENGINE_LABELS[engine.id]} now uses your ${account.accountName} account.`);
+      case 'removeKey':
+        await this.host.secrets.delete(account.secretKey);
+        if (mode === 'apiKey') await this.host.updateConfig(account.modeSetting, 'subscription');
+        await this.refreshAuth();
+        return this.notify('info', 'API key removed.');
+      case 'signOut':
+        this.host.runInTerminal(`${ENGINE_LABELS[engine.id]} sign-out`, account.logoutCommand());
+        this.debounce('auth', 4000, () => void this.refreshAuth());
+        return;
+      default:
+        return;
+    }
+  }
+
+  /** Sign in with the engine's own account (Claude / ChatGPT) in a terminal, then wait for it to finish. */
+  async signIn(deviceCode = false): Promise<void> {
+    const engine = this.engine;
+    const account = engine.account;
+    if (!account) return this.accountMenu();
+    if (engine.status().state !== 'ready') return this.notify('warn', engine.status().detail ?? `${ENGINE_LABELS[engine.id]} is not available.`);
+    if (account.mode() !== 'subscription') await this.host.updateConfig(account.modeSetting, 'subscription');
+    this.host.runInTerminal(`${ENGINE_LABELS[engine.id]} sign-in`, account.loginCommand({ deviceCode }));
+    this.notify('info', `Finish signing in with your ${account.accountName} account in the browser. The chat picks it up by itself.`);
+    this.waitForSignIn(engine.id);
+  }
+
+  /** Store an API key for the active engine and switch it to API-key mode. */
+  async useApiKey(): Promise<void> {
+    const engine = this.engine;
+    const account = engine.account;
+    if (!account) return this.manageProviders();
+    const key = await this.host.input({
+      title: `${ENGINE_LABELS[engine.id]}: API key`,
+      prompt: `Billed per token by ${engine.id === 'claude-code' ? 'Anthropic' : 'OpenAI'}. Stored in VS Code Secret Storage, never in settings. You can switch back to your ${account.accountName} account with /login.`,
+      password: true,
+      placeholder: engine.id === 'claude-code' ? 'sk-ant-…' : 'sk-…',
+    });
+    if (!key?.trim()) return;
+    await this.host.secrets.set(account.secretKey, key.trim());
+    await this.host.updateConfig(account.modeSetting, 'apiKey');
+    this.stopSignInWait();
+    await this.refreshAuth();
+    this.notify('info', `${ENGINE_LABELS[engine.id]} now uses your API key.`);
+  }
+
+  private waitForSignIn(engineId: EngineId): void {
+    this.stopSignInWait();
+    this.signInPending = engineId;
+    if (this.state.auth) this.set({ auth: { ...this.state.auth, pending: true } });
+    const started = Date.now();
+    const tick = async () => {
+      this.signInTimer = undefined;
+      if (this.signInPending !== engineId || this.state.engine !== engineId) return;
+      const status = await this.refreshAuth();
+      if (this.signInPending !== engineId) return;
+      if (status?.signedIn && status.billing !== 'apiKey') {
+        this.stopSignInWait();
+        this.set({ auth: { ...status, pending: undefined } });
+        this.notify('info', `Signed in${status.label ? `: ${status.label}` : ''}.`);
+        this.debounce('catalog', 300, () => void this.refreshCatalog());
+        return;
+      }
+      if (Date.now() - started > 10 * 60_000) {
+        this.stopSignInWait();
+        if (this.state.auth) this.set({ auth: { ...this.state.auth, pending: undefined } });
+        return;
+      }
+      this.signInTimer = setTimeout(() => void tick(), 2500);
+    };
+    this.signInTimer = setTimeout(() => void tick(), 2500);
+  }
+
+  private stopSignInWait(): void {
+    if (this.signInTimer) clearTimeout(this.signInTimer);
+    this.signInTimer = undefined;
+    this.signInPending = undefined;
+  }
+
+  /** The sign-in setting of an engine changed outside the chat. */
+  onAuthConfigChanged(): void {
+    if (this.engine.account) this.debounce('auth', 200, () => void this.refreshAuth());
   }
 
   private async connectOpencodeProvider(): Promise<void> {
@@ -939,6 +1090,12 @@ export class ChatController {
         return msg.delta === 0 ? this.setZoom(1) : this.zoom(msg.delta);
       case 'manageProviders':
         return this.manageProviders();
+      case 'signIn':
+        return this.signIn(!!msg.deviceCode);
+      case 'useApiKey':
+        return this.useApiKey();
+      case 'accountMenu':
+        return this.accountMenu();
       case 'restartEngine':
         return this.restartEngine();
       case 'openSettings':
@@ -983,8 +1140,8 @@ export class ChatController {
 const ENGINE_DETAILS: Record<EngineId, string> = {
   opencode: 'opencode server — every opencode provider, agents, custom commands, MCP, undo, share',
   direct: 'Your own API keys: OpenAI, Anthropic, OpenRouter, Ollama, any OpenAI-compatible endpoint',
-  'claude-code': 'Your installed Claude Code CLI and its login (Claude subscription or API key)',
-  codex: 'Your installed Codex CLI and its login (ChatGPT subscription or API key)',
+  'claude-code': 'Your installed Claude Code CLI, signed in with your Claude account (Pro / Max). API key optional.',
+  codex: 'Your installed Codex CLI, signed in with your ChatGPT account (Plus / Pro). API key optional.',
   'vscode-lm': 'GitHub Copilot and other models exposed through VS Code',
 };
 

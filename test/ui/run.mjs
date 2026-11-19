@@ -675,6 +675,85 @@ await test('performance: a long streamed reply stays smooth', async () => {
   await t.page.close();
 });
 
+await test('copy button on every response', async () => {
+  const t = await open();
+  await t.host({ type: 'state', state: conversation });
+  await t.page.waitForSelector('.msg.assistant .copy-reply');
+  // The whole reply as Markdown: its text, without thinking or tool calls.
+  const reply = conversation.messages[1].parts.filter((p) => p.type === 'text').map((p) => p.text.trim()).join('\n\n');
+  await t.clearPosted();
+  await t.page.click('.msg.assistant .copy-reply');
+  assert.deepEqual(await t.posted('copy'), [{ type: 'copy', text: reply }]);
+  await t.page.waitForFunction(() => /Copied/.test(document.querySelector('.copy-reply')?.textContent ?? ''));
+  assert.match(await t.text('.msg.assistant .msg-foot .meta'), /claude-sonnet-5-5/);
+  await t.shot('19-copy-response-dark');
+  await t.page.waitForFunction(() => /^Copy$/.test(document.querySelector('.copy-reply')?.textContent ?? ''), { timeout: 4000 });
+  // A reply that is still streaming offers no copy button yet; it appears once it is done.
+  const streaming = { id: 'm3', sessionId: 'ses_1', role: 'assistant', createdAt: Date.now(), parts: [{ id: 'q1', type: 'text', text: 'Half an ans' }] };
+  await t.host({ type: 'patch', patch: { messages: [...conversation.messages, streaming], activity: 'busy' } });
+  assert.equal(await t.page.$$eval('.msg.assistant', (els) => els.at(-1).querySelector('.copy-reply')), null);
+  await t.host({ type: 'patch', patch: { messages: [...conversation.messages, { ...streaming, completedAt: Date.now(), parts: [{ id: 'q1', type: 'text', text: 'Half an answer, then the rest.' }] }], activity: 'idle' } });
+  await t.clearPosted();
+  await t.page.$$eval('.msg.assistant .copy-reply', (els) => els.at(-1).click());
+  assert.deepEqual(await t.posted('copy'), [{ type: 'copy', text: 'Half an answer, then the rest.' }]);
+  assert.equal(await t.page.$$eval('.msg.user .copy-reply', (els) => els.length), 0);
+  assert.deepEqual(t.consoleErrors, []);
+  await t.page.close();
+});
+
+await test('Claude Code and Codex ask to sign in with the account first, API key second', async () => {
+  const t = await open();
+  const claude = { ...base, engine: 'claude-code', sessions: [], model: { providerId: 'claude-code', modelId: 'default' }, auth: { engine: 'claude-code', mode: 'subscription', signedIn: false } };
+  await t.host({ type: 'state', state: claude });
+  await t.page.waitForSelector('.callout.account');
+  assert.equal(await t.text('.callout.account .callout-title'), 'Sign in to Claude Code with your Claude account');
+  assert.match(await t.text('.callout.account'), /Claude Pro or Max plan: no API key and no per-token charges/);
+  assert.equal(await t.text('.callout.account .btn.primary'), 'Sign in with Claude');
+  assert.equal(await t.page.$('.suggestion'), null);
+  await t.shot('20-sign-in-claude-dark');
+  await t.clearPosted();
+  await t.page.click('.callout.account .btn.primary');
+  assert.deepEqual(await t.posted('signIn'), [{ type: 'signIn' }]);
+  const [apiKey] = await t.page.$$('xpath/.//button[contains(., "Use an API key instead")]');
+  await apiKey.click();
+  assert.deepEqual(await t.posted('useApiKey'), [{ type: 'useApiKey' }]);
+
+  // Waiting for the browser sign-in.
+  await t.host({ type: 'patch', patch: { auth: { ...claude.auth, pending: true } } });
+  await t.page.waitForFunction(() => /Waiting for your Claude sign-in/.test(document.querySelector('.callout.account')?.textContent ?? ''));
+  assert.ok(await t.page.$('.callout.account .spinner'));
+
+  // Signed in: the welcome comes back, with the account shown.
+  await t.host({ type: 'patch', patch: { auth: { engine: 'claude-code', mode: 'subscription', signedIn: true, billing: 'subscription', label: 'Claude account · Max · me@example.com' } } });
+  await t.page.waitForSelector('.account-chip');
+  assert.match(await t.text('.account-chip'), /Claude account · Max · me@example\.com.*Change/);
+  assert.ok(await t.page.$('.suggestion'));
+  await t.clearPosted();
+  await t.page.click('.account-chip');
+  assert.deepEqual(await t.posted('accountMenu'), [{ type: 'accountMenu' }]);
+
+  // Codex: ChatGPT account, with a device-code option; and a warning when it is billing an API key.
+  const codex = { ...base, engine: 'codex', engines: base.engines.map((e) => (e.engine === 'codex' ? { engine: 'codex', state: 'ready', version: '0.170.0' } : e)), sessions: [], model: { providerId: 'codex', modelId: 'default' }, auth: { engine: 'codex', mode: 'subscription', signedIn: true, billing: 'apiKey', label: 'API key (saved by `codex login`)' } };
+  await t.host({ type: 'state', state: codex });
+  await t.page.waitForFunction(() => /Codex \(ChatGPT\) is using an API key/.test(document.querySelector('.callout.account')?.textContent ?? ''));
+  assert.match(await t.text('.callout.account'), /ChatGPT Plus or Pro plan instead/);
+  await t.clearPosted();
+  const [device] = await t.page.$$('xpath/.//button[contains(., "Use a device code")]');
+  await device.click();
+  assert.deepEqual(await t.posted('signIn'), [{ type: 'signIn', deviceCode: true }]);
+
+  // API-key mode without a key, inside a conversation: a bar above the composer.
+  await t.host({ type: 'state', state: { ...conversation, engine: 'claude-code', auth: { engine: 'claude-code', mode: 'apiKey', signedIn: false } } });
+  await t.page.waitForSelector('.callout.auth-bar');
+  assert.equal(await t.text('.auth-bar .callout-title'), 'Add an API key for Claude Code');
+  await t.clearPosted();
+  await t.page.click('.auth-bar .btn.primary');
+  assert.deepEqual(await t.posted('useApiKey'), [{ type: 'useApiKey' }]);
+  await t.shot('21-api-key-bar-dark');
+  assert.deepEqual(t.consoleErrors, []);
+  await t.page.close();
+});
+
 await test('engine not available, untrusted workspace and toasts', async () => {
   const t = await open();
   const down = { ...base, engine: 'codex', model: undefined, providers: [], mcp: [], agents: [] };

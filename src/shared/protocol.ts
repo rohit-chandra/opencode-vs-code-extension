@@ -1,6 +1,7 @@
 import type {
   AgentInfo,
   Attachment,
+  AuthStatus,
   ChatMessage,
   EngineCapabilities,
   EngineEvent,
@@ -51,6 +52,8 @@ export interface ViewState {
   canRetry: boolean;
   /** Models picked lately for the active engine, newest first. */
   recentModels: ModelRef[];
+  /** Account sign-in of the active engine (Claude Code, Codex); undefined for engines without one. */
+  auth: AuthStatus | undefined;
   panel: { name: 'none' | 'sessions' | 'mcp' | 'usage' | 'models'; nonce: number };
   notice: { level: 'info' | 'warn' | 'error'; text: string; nonce: number } | undefined;
   loading: boolean;
@@ -99,6 +102,12 @@ export type WebviewToHost =
   | { type: 'moveView'; to: 'left' | 'right' | 'editor' }
   | { type: 'zoom'; delta: number }
   | { type: 'manageProviders' }
+  /** Sign in with the engine's own account (Claude / ChatGPT), in a terminal. */
+  | { type: 'signIn'; deviceCode?: boolean }
+  /** Store an API key for the active engine and switch it to API-key mode. */
+  | { type: 'useApiKey' }
+  /** Account options: sign in, API key, sign out. */
+  | { type: 'accountMenu' }
   | { type: 'restartEngine' }
   | { type: 'openSettings' }
   /** Sent once the companion is on screen; tells the host which renderer the webview ended up with. */

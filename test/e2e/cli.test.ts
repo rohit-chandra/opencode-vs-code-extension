@@ -1,9 +1,14 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import * as path from 'node:path';
+import { UsageLedger } from '../../src/core/usageLedger';
+import type { Engine } from '../../src/core/engine';
 import { ClaudeCodeEngine } from '../../src/engines/cli/claudeCode';
 import { CodexEngine } from '../../src/engines/cli/codex';
-import { findBin, makeContext, record } from '../helpers/context';
+import type { EngineId } from '../../src/shared/types';
+import { ChatController } from '../../src/ui/controller';
+import { MemoryStore, findBin, makeContext, record } from '../helpers/context';
+import { FakeHost } from '../helpers/fakeHost';
 import type { TestContext } from '../helpers/context';
 // @ts-expect-error plain ESM fixture without types
 import { createMockLlm } from '../fixtures/mock-llm.mjs';
@@ -46,6 +51,8 @@ describe.skipIf(!claudeBin)('Claude Code engine (real `claude` CLI + mock Anthro
       env: cleanEnv({ HOME: home, USERPROFILE: home, ANTHROPIC_BASE_URL: `http://127.0.0.1:${port}`, ANTHROPIC_API_KEY: 'sk-mock', CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1', DISABLE_TELEMETRY: '1', DISABLE_AUTOUPDATER: '1' }),
     });
     ctx.settings['claudeCode.path'] = claudeBin;
+    // The mock is reached with a dummy API key, so these tests run in API-key mode (key from the environment).
+    ctx.settings['claudeCode.auth'] = 'apiKey';
     engine = new ClaudeCodeEngine(ctx);
     const status = await engine.start();
     expect(status.state).toBe('ready');
@@ -136,6 +143,41 @@ describe.skipIf(!claudeBin)('Claude Code engine (real `claude` CLI + mock Anthro
     expect(rec.messages(session2.id)[1].parts.find((p) => p.type === 'tool')).toMatchObject({ tool: 'mcp__other__add', status: 'completed', output: '2' });
     ctx.settings['claudeCode.permissionMode'] = 'acceptEdits';
     await engine.setMcpEnabled('mockmcp', true);
+  });
+
+  it('uses the Claude account by default: an API key in the environment never reaches the API', async () => {
+    ctx.settings['claudeCode.auth'] = 'subscription';
+    try {
+      // The test HOME has no Claude login, and ANTHROPIC_API_KEY is removed for the CLI.
+      expect(await engine.account.status()).toMatchObject({ engine: 'claude-code', mode: 'subscription', signedIn: false });
+      const before = mock.log.length;
+      const rec = record(engine);
+      const session = await engine.createSession();
+      await engine.sendPrompt(session.id, { text: 'should not be billed', attachments: [], model: { providerId: 'claude-code', modelId: 'sonnet' } });
+      await rec.waitIdle(session.id, 60_000);
+      const assistant = rec.messages(session.id)[1];
+      expect(`${assistant.error ?? ''} ${(assistant.parts.at(-1) as { text?: string } | undefined)?.text ?? ''}`).toMatch(/log ?in|auth/i);
+      expect(mock.log.slice(before).filter((r) => (r as { headers?: Record<string, unknown> }).headers?.['x-api-key'] === 'sk-mock')).toEqual([]);
+    } finally {
+      ctx.settings['claudeCode.auth'] = 'apiKey';
+    }
+  });
+
+  it('uses the API key from Secret Storage in API-key mode', async () => {
+    await ctx.secrets.set(engine.account.secretKey, 'sk-stored');
+    try {
+      expect(await engine.account.status()).toMatchObject({ mode: 'apiKey', signedIn: true, billing: 'apiKey', label: 'API key' });
+      const before = mock.log.length;
+      const rec = record(engine);
+      const session = await engine.createSession();
+      await engine.sendPrompt(session.id, { text: 'stored key please', attachments: [], model: { providerId: 'claude-code', modelId: 'sonnet' } });
+      await rec.waitIdle(session.id, 100_000);
+      const keys = mock.log.slice(before).map((r) => (r as { headers?: Record<string, unknown> }).headers?.['x-api-key']).filter(Boolean);
+      expect(keys.length).toBeGreaterThan(0);
+      expect(new Set(keys)).toEqual(new Set(['sk-stored']));
+    } finally {
+      await ctx.secrets.delete(engine.account.secretKey);
+    }
   });
 
   it('reports a failing API as an error on the message', async () => {
@@ -242,6 +284,81 @@ describe.skipIf(!codexBin)('Codex engine (real `codex` CLI + mock Responses API)
     // The mock accepts any model name, so this still succeeds; the point is that -m is passed through.
     const last = mock.log.filter((l) => l.path === '/responses').pop()!;
     expect(last.body.model).toBe('definitely-not-a-model');
+  });
+
+  it('reports the ChatGPT sign-in state, and the stored key in API-key mode', async () => {
+    // CODEX_HOME holds no login: subscription mode is "not signed in".
+    expect(await engine.account.status()).toMatchObject({ engine: 'codex', mode: 'subscription', signedIn: false });
+    expect(engine.account.loginCommand()).toMatch(/codex(\.cmd|\.exe)?"? login$/);
+    expect(engine.account.loginCommand({ deviceCode: true })).toMatch(/ login --device-auth$/);
+    ctx.settings['codex.auth'] = 'apiKey';
+    try {
+      expect(await engine.account.status()).toMatchObject({ mode: 'apiKey', signedIn: false });
+      await ctx.secrets.set(engine.account.secretKey, 'sk-stored');
+      expect(await engine.account.status()).toMatchObject({ mode: 'apiKey', signedIn: true, billing: 'apiKey' });
+    } finally {
+      delete ctx.settings['codex.auth'];
+      await ctx.secrets.delete(engine.account.secretKey);
+    }
+  });
+});
+
+/** The chat as the webview drives it, with a Claude Code CLI that is not signed in. */
+describe.skipIf(!claudeBin)('Signing in to Claude Code from the chat', () => {
+  let ctx: TestContext;
+  let host: FakeHost;
+  let controller: ChatController;
+  let engine: ClaudeCodeEngine;
+
+  beforeAll(async () => {
+    ctx = makeContext({ settings: { defaultEngine: 'claude-code' } });
+    const home = path.join(ctx.dir, 'home');
+    mkdirSync(home, { recursive: true });
+    // An API key in the environment must not count as being signed in.
+    ctx.env = cleanEnv({ HOME: home, USERPROFILE: home, ANTHROPIC_API_KEY: 'sk-env', CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1', DISABLE_AUTOUPDATER: '1' });
+    ctx.settings['claudeCode.path'] = claudeBin;
+    ctx.cwd = () => ctx.dir;
+    host = new FakeHost(ctx);
+    engine = new ClaudeCodeEngine(ctx);
+    controller = new ChatController(new Map<EngineId, Engine>([['claude-code', engine]]), new UsageLedger(new MemoryStore()), host);
+    await controller.handleMessage({ type: 'ready' });
+    await controller.activate();
+  });
+
+  afterAll(async () => {
+    controller?.dispose();
+    await engine?.dispose();
+    ctx?.cleanup();
+  });
+
+  it('shows the Claude account sign-in first and does not send while signed out', async () => {
+    const v = await host.until((s) => !s.loading && !!s.auth, 30_000, 'auth status');
+    expect(v.auth).toMatchObject({ engine: 'claude-code', mode: 'subscription', signedIn: false });
+    await controller.handleMessage({ type: 'send', text: 'hello' });
+    expect(host.view!.notice?.text).toMatch(/Sign in with your Claude account/);
+    expect(host.view!.messages).toEqual([]);
+  });
+
+  it('signs in with the Claude account in a terminal and waits for it', async () => {
+    await controller.handleMessage({ type: 'signIn' });
+    expect(host.terminals.at(-1)?.command).toMatch(/ auth login --claudeai$/);
+    expect(host.view!.auth?.pending).toBe(true);
+    expect(ctx.settings['claudeCode.auth'] ?? 'subscription').toBe('subscription');
+  });
+
+  it('switches to an API key on request, and back to the account', async () => {
+    host.inputs.push('sk-ant-from-user');
+    await controller.handleMessage({ type: 'useApiKey' });
+    expect(ctx.settings['claudeCode.auth']).toBe('apiKey');
+    expect(await ctx.secrets.get(engine.account.secretKey)).toBe('sk-ant-from-user');
+    expect(host.view!.auth).toMatchObject({ mode: 'apiKey', signedIn: true, billing: 'apiKey' });
+    expect(host.view!.auth?.pending).toBeUndefined();
+
+    host.pickByLabel(/Use my Claude account again/);
+    await controller.handleMessage({ type: 'send', text: '/login' });
+    expect(ctx.settings['claudeCode.auth']).toBe('subscription');
+    // Still not signed in, so it goes straight to the sign-in.
+    expect(host.terminals.at(-1)?.command).toMatch(/ auth login --claudeai$/);
   });
 });
 

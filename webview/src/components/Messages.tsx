@@ -3,7 +3,7 @@ import type { ComponentChildren, FunctionComponent } from 'preact';
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'preact/hooks';
 import type { ChatMessage, Part } from '../../../src/shared/types';
 import { compact, money, tokensIn, tokensOut } from '../format';
-import { IconBrain, IconCheck, IconChevron, IconClose, IconFile, IconImage, IconRefresh, IconTool, IconWarn } from '../icons';
+import { IconBrain, IconCheck, IconChevron, IconClose, IconCopy, IconFile, IconImage, IconRefresh, IconTool, IconWarn } from '../icons';
 import { renderBlocks } from '../markdown';
 import { send } from '../store';
 
@@ -139,6 +139,40 @@ function PartView({ part, live }: { part: Part; live: boolean }) {
   }
 }
 
+/** The reply as Markdown: its text parts, without thinking or tool calls. */
+export function replyText(message: ChatMessage): string {
+  return message.parts
+    .filter((p): p is Extract<Part, { type: 'text' }> => p.type === 'text')
+    .map((p) => p.text.trim())
+    .filter(Boolean)
+    .join('\n\n');
+}
+
+function CopyReply({ message }: { message: ChatMessage }) {
+  const [copied, setCopied] = useState(false);
+  useEffect(() => {
+    if (!copied) return;
+    const id = setTimeout(() => setCopied(false), 1500);
+    return () => clearTimeout(id);
+  }, [copied]);
+  return (
+    <button
+      type="button"
+      class={`msg-action copy-reply ${copied ? 'done' : ''}`}
+      title={copied ? 'Copied' : 'Copy response'}
+      aria-label={copied ? 'Copied' : 'Copy response'}
+      onClick={(e) => {
+        e.stopPropagation();
+        send({ type: 'copy', text: replyText(message) });
+        setCopied(true);
+      }}
+    >
+      {copied ? <IconCheck size={13} /> : <IconCopy size={13} />}
+      <span class="msg-action-label">{copied ? 'Copied' : 'Copy'}</span>
+    </button>
+  );
+}
+
 const Message = memo(function Message({ message, live }: { message: ChatMessage; live: boolean }) {
   if (message.role === 'user') {
     const files = message.parts.filter((p) => p.type === 'file');
@@ -155,6 +189,8 @@ const Message = memo(function Message({ message, live }: { message: ChatMessage;
   }
   const u = message.usage;
   const empty = message.parts.length === 0 && !message.error;
+  // Offered once the reply has stopped streaming, so the copy is the whole answer.
+  const canCopy = !live && message.parts.some((p) => p.type === 'text' && p.text.trim() !== '');
   return (
     <div class="msg assistant" data-message-id={message.id}>
       {message.parts.map((p) => (
@@ -173,12 +209,17 @@ const Message = memo(function Message({ message, live }: { message: ChatMessage;
           <span>{message.error}</span>
         </div>
       )}
-      {u && message.completedAt && (
-        <div class="meta" title={`Input ${u.input.toLocaleString()} · cache read ${u.cacheRead.toLocaleString()} · cache write ${u.cacheWrite.toLocaleString()} · output ${u.output.toLocaleString()} · reasoning ${u.reasoning.toLocaleString()}`}>
-          {message.model && <span class="meta-model">{message.model.modelId}</span>}
-          <span>{compact(tokensIn(u))} in</span>
-          <span>{compact(tokensOut(u))} out</span>
-          {u.cost > 0 && <span>{money(u.cost)}</span>}
+      {(canCopy || (u && message.completedAt)) && (
+        <div class="msg-foot">
+          {canCopy && <CopyReply message={message} />}
+          {u && message.completedAt && (
+            <div class="meta" title={`Input ${u.input.toLocaleString()} · cache read ${u.cacheRead.toLocaleString()} · cache write ${u.cacheWrite.toLocaleString()} · output ${u.output.toLocaleString()} · reasoning ${u.reasoning.toLocaleString()}`}>
+              {message.model && <span class="meta-model">{message.model.modelId}</span>}
+              <span>{compact(tokensIn(u))} in</span>
+              <span>{compact(tokensOut(u))} out</span>
+              {u.cost > 0 && <span>{money(u.cost)}</span>}
+            </div>
+          )}
         </div>
       )}
     </div>

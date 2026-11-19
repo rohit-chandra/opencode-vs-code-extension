@@ -1,11 +1,12 @@
 import { promises as fs } from 'node:fs';
 import * as path from 'node:path';
-import type { EngineContext } from '../../core/engine';
+import type { EngineAccount, EngineContext } from '../../core/engine';
 import { EngineError } from '../../core/engine';
 import { LocalEngine } from '../../core/localEngine';
 import type { Turn } from '../../core/localEngine';
 import { findExecutable, runCapture } from '../../core/process';
-import type { EngineCapabilities, McpServerInfo, ModelRef, ProviderInfo } from '../../shared/types';
+import type { AuthMode, AuthStatus, EngineCapabilities, McpServerInfo, ModelRef, ProviderInfo } from '../../shared/types';
+import { apiKeySecret, authMode, codexEnv, parseCodexLoginStatus, shellExe } from './auth';
 import { CodexStreamTranslator } from './codexStream';
 import { StateFile, imageBase64, promptForAgent, runJsonl } from './common';
 
@@ -14,8 +15,9 @@ interface CodexState {
 }
 
 /**
- * Codex engine: drives the user's own `codex` CLI (`codex exec --json`), so it uses the
- * ChatGPT login or API key that CLI is configured with.
+ * Codex engine: drives the user's own `codex` CLI (`codex exec --json`). By default it uses
+ * the ChatGPT account (Plus / Pro / Team plan) the CLI is signed in with; an API key is used
+ * only when the user picks API-key mode.
  */
 export class CodexEngine extends LocalEngine {
   readonly id = 'codex' as const;
@@ -44,10 +46,37 @@ export class CodexEngine extends LocalEngine {
     return this.ctx.env ?? process.env;
   }
 
+  /** Environment for the CLI: without CODEX_API_KEY in subscription mode, with the stored key in API-key mode. */
+  private async runEnv(): Promise<NodeJS.ProcessEnv> {
+    const mode = this.account.mode();
+    return codexEnv(this.env(), mode, mode === 'apiKey' ? await this.ctx.secrets.get(this.account.secretKey) : undefined);
+  }
+
+  readonly account: EngineAccount = {
+    accountName: 'ChatGPT',
+    modeSetting: 'codex.auth',
+    secretKey: apiKeySecret('codex'),
+    mode: (): AuthMode => authMode(this.ctx.config<string>('codex.auth', 'subscription')),
+    status: async (): Promise<AuthStatus> => {
+      const mode = this.account.mode();
+      if (mode === 'apiKey') {
+        const stored = await this.ctx.secrets.get(this.account.secretKey);
+        const env = this.env();
+        const key = stored || env.CODEX_API_KEY || env.OPENAI_API_KEY;
+        return { engine: 'codex', mode, signedIn: !!key, billing: 'apiKey', label: key ? `API key${stored ? '' : ' (from the environment)'}` : undefined };
+      }
+      if (!this.exe) return { engine: 'codex', mode, signedIn: undefined };
+      const res = await runCapture(this.exe, ['login', 'status'], { env: await this.runEnv(), timeoutMs: 20_000 }).catch(() => undefined);
+      return { engine: 'codex', mode, ...(res ? parseCodexLoginStatus(`${res.stdout}\n${res.stderr}`, res.code) : { signedIn: undefined }) };
+    },
+    loginCommand: (options) => `${shellExe(this.ctx.config<string>('codex.path', ''), 'codex')} login${options?.deviceCode ? ' --device-auth' : ''}`,
+    logoutCommand: () => `${shellExe(this.ctx.config<string>('codex.path', ''), 'codex')} logout`,
+  };
+
   protected async checkAvailability(): Promise<{ ok: boolean; detail?: string; version?: string }> {
     this.exe = await findExecutable('codex', this.ctx.config<string>('codex.path', ''), this.env());
     if (!this.exe) {
-      return { ok: false, detail: 'Codex CLI not found. Install it (npm i -g @openai/codex), sign in with `codex login`, or set "opencodeHub.codex.path".' };
+      return { ok: false, detail: 'Codex CLI not found. Install it (npm i -g @openai/codex) or set "opencodeHub.codex.path", then sign in with your ChatGPT account.' };
     }
     const v = await runCapture(this.exe, ['--version'], { env: this.env(), timeoutMs: 15_000 });
     return { ok: true, version: v.stdout.trim().split(/\s+/).pop() || undefined };
@@ -115,6 +144,7 @@ export class CodexEngine extends LocalEngine {
       if (/^[A-Za-z0-9_-]+$/.test(s.name)) args.push('-c', `mcp_servers.${s.name}.enabled=${!state.disabledMcp.includes(s.name) && s.enabled}`);
     }
 
+    const env = await this.runEnv();
     const { text, images } = promptForAgent(input);
     const temp: string[] = [];
     for (const a of images) {
@@ -139,7 +169,7 @@ export class CodexEngine extends LocalEngine {
         file: this.exe,
         args,
         cwd: this.ctx.cwd() ?? this.ctx.storageDir,
-        env: this.env(),
+        env,
         stdin: text,
         signal,
         onEvent: (ev) => translator.handle(ev),
@@ -149,7 +179,7 @@ export class CodexEngine extends LocalEngine {
       if (translator.threadId) session.meta.codexThreadId = translator.threadId;
       if (translator.error) throw new Error(translator.error);
       if (!translator.finished) {
-        throw new Error(`Codex exited (code ${code ?? '?'}) before finishing.${stderr.trim() ? ' ' + stderr.trim().slice(-500) : ''}${/login|auth|401/i.test(stderr) ? ' Run `codex login` in a terminal to sign in.' : ''}`);
+        throw new Error(`Codex exited (code ${code ?? '?'}) before finishing.${stderr.trim() ? ' ' + stderr.trim().slice(-500) : ''}${/login|auth|401/i.test(stderr) ? ' Use /login to sign in with your ChatGPT account.' : ''}`);
       }
     } finally {
       await Promise.all(temp.map((f) => fs.rm(f, { force: true }).catch(() => undefined)));

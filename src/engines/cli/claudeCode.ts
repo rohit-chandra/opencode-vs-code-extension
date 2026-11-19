@@ -1,12 +1,13 @@
 import { promises as fs } from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import type { EngineContext } from '../../core/engine';
+import type { EngineAccount, EngineContext } from '../../core/engine';
 import { EngineError } from '../../core/engine';
 import { LocalEngine } from '../../core/localEngine';
 import type { Turn } from '../../core/localEngine';
 import { findExecutable, runCapture } from '../../core/process';
-import type { EngineCapabilities, McpServerInfo, ModelRef, PromptInput, ProviderInfo, SlashCommand } from '../../shared/types';
+import type { AuthMode, AuthStatus, EngineCapabilities, McpServerInfo, ModelRef, PromptInput, ProviderInfo, SlashCommand } from '../../shared/types';
+import { apiKeySecret, authMode, claudeEnv, parseClaudeAuthStatus, shellExe } from './auth';
 import { ClaudeStreamTranslator } from './claudeStream';
 import { StateFile, imageBase64, promptForAgent, readJsonFile, runJsonl } from './common';
 
@@ -21,8 +22,9 @@ type McpDefs = Record<string, { command?: string; args?: string[]; url?: string;
 const DEFAULT_MODELS = ['default', 'opus', 'sonnet', 'haiku'];
 
 /**
- * Claude Code engine: drives the user's own `claude` CLI in print mode with stream-json,
- * so it uses whatever login that CLI has (Claude subscription or API key).
+ * Claude Code engine: drives the user's own `claude` CLI in print mode with stream-json.
+ * By default it uses the Claude account (Pro / Max subscription) the CLI is signed in with;
+ * an API key is used only when the user picks API-key mode.
  */
 export class ClaudeCodeEngine extends LocalEngine {
   readonly id = 'claude-code' as const;
@@ -51,10 +53,36 @@ export class ClaudeCodeEngine extends LocalEngine {
     return this.ctx.env ?? process.env;
   }
 
+  /** Environment for the CLI: without API-key variables in subscription mode, with the stored key in API-key mode. */
+  private async runEnv(): Promise<NodeJS.ProcessEnv> {
+    const mode = this.account.mode();
+    return claudeEnv(this.env(), mode, mode === 'apiKey' ? await this.ctx.secrets.get(this.account.secretKey) : undefined);
+  }
+
+  readonly account: EngineAccount = {
+    accountName: 'Claude',
+    modeSetting: 'claudeCode.auth',
+    secretKey: apiKeySecret('claude-code'),
+    mode: (): AuthMode => authMode(this.ctx.config<string>('claudeCode.auth', 'subscription')),
+    status: async (): Promise<AuthStatus> => {
+      const mode = this.account.mode();
+      if (mode === 'apiKey') {
+        const stored = await this.ctx.secrets.get(this.account.secretKey);
+        const key = stored || this.env().ANTHROPIC_API_KEY;
+        return { engine: 'claude-code', mode, signedIn: !!key, billing: 'apiKey', label: key ? `API key${stored ? '' : ' (ANTHROPIC_API_KEY)'}` : undefined };
+      }
+      if (!this.exe) return { engine: 'claude-code', mode, signedIn: undefined };
+      const res = await runCapture(this.exe, ['auth', 'status', '--json'], { env: await this.runEnv(), timeoutMs: 20_000 }).catch(() => undefined);
+      return { engine: 'claude-code', mode, ...(res ? parseClaudeAuthStatus(res.stdout) : { signedIn: undefined }) };
+    },
+    loginCommand: () => `${shellExe(this.ctx.config<string>('claudeCode.path', ''), 'claude')} auth login --claudeai`,
+    logoutCommand: () => `${shellExe(this.ctx.config<string>('claudeCode.path', ''), 'claude')} auth logout`,
+  };
+
   protected async checkAvailability(): Promise<{ ok: boolean; detail?: string; version?: string }> {
     this.exe = await findExecutable('claude', this.ctx.config<string>('claudeCode.path', ''), this.env());
     if (!this.exe) {
-      return { ok: false, detail: 'Claude Code CLI not found. Install it (npm i -g @anthropic-ai/claude-code), sign in once by running `claude` in a terminal, or set "opencodeHub.claudeCode.path".' };
+      return { ok: false, detail: 'Claude Code CLI not found. Install it (npm i -g @anthropic-ai/claude-code) or set "opencodeHub.claudeCode.path", then sign in with your Claude account.' };
     }
     const v = await runCapture(this.exe, ['--version'], { env: this.env(), timeoutMs: 15_000 });
     return { ok: true, version: v.stdout.trim().split(/\s+/)[0] || undefined };
@@ -162,13 +190,14 @@ export class ClaudeCodeEngine extends LocalEngine {
       args.push('--strict-mcp-config', '--mcp-config', mcpFile);
     }
 
+    const env = await this.runEnv();
     const translator = new ClaudeStreamTranslator(assistant);
     try {
       const { code, stderr } = await runJsonl({
         file: this.exe,
         args,
         cwd: this.ctx.cwd() ?? this.ctx.storageDir,
-        env: this.env(),
+        env,
         stdin: (await userLine(input)) + '\n',
         signal,
         onEvent: (ev) => translator.handle(ev),
@@ -192,7 +221,7 @@ export class ClaudeCodeEngine extends LocalEngine {
       }
       if (translator.error) throw new Error(translator.error);
       if (!translator.finished) {
-        throw new Error(`Claude Code exited (code ${code ?? '?'}) before finishing.${stderr.trim() ? ' ' + stderr.trim().slice(-500) : ''}${/login|auth|credential/i.test(stderr) ? ' Run `claude` in a terminal to sign in.' : ''}`);
+        throw new Error(`Claude Code exited (code ${code ?? '?'}) before finishing.${stderr.trim() ? ' ' + stderr.trim().slice(-500) : ''}${/login|auth|credential|api key/i.test(stderr) ? ' Use /login to sign in with your Claude account.' : ''}`);
       }
     } finally {
       if (mcpFile) await fs.rm(mcpFile, { force: true }).catch(() => undefined);

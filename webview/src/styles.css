@@ -289,6 +289,58 @@ kbd {
   background: var(--oh-surface);
   max-width: 44em;
 }
+.welcome > .callout.account {
+  border-left-color: var(--oh-accent);
+}
+.callout.account > .icon,
+.callout.account > .spinner {
+  color: var(--oh-accent);
+  flex: none;
+  margin-top: 3px;
+}
+.callout .btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+/* Sign-in prompt shown above the composer when a conversation is open. */
+.callout.auth-bar {
+  flex: none;
+  display: flex;
+  gap: 10px;
+  margin: 0 10px 6px;
+  padding: 10px 12px;
+  border: 1px solid var(--oh-border);
+  border-left: 3px solid var(--oh-accent);
+  border-radius: var(--oh-radius);
+  background: var(--oh-surface);
+}
+.callout.auth-bar p {
+  margin: 0;
+}
+.account-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+  padding: 2px 9px;
+  border: 1px solid var(--oh-border);
+  border-radius: 999px;
+  color: var(--oh-muted);
+  font-size: 0.9em;
+}
+.account-chip > span:first-of-type {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.account-chip:hover {
+  border-color: var(--oh-accent);
+  color: var(--vscode-foreground);
+}
+.account-change {
+  color: var(--vscode-textLink-foreground, var(--oh-accent));
+}
 .callout > .icon {
   color: var(--oh-warn);
   margin-top: 2px;
@@ -349,6 +401,36 @@ kbd {
   border: 1px solid var(--vscode-input-border, var(--oh-border));
   white-space: pre-wrap;
   overflow-wrap: anywhere;
+}
+.msg-foot {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 2px 10px;
+}
+.msg-action {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 1px 6px;
+  margin-left: -6px;
+  border-radius: 4px;
+  color: var(--oh-muted);
+  font-size: 0.85em;
+  opacity: 0.7;
+  transition: opacity 0.12s, background 0.12s;
+}
+.msg:hover .msg-action,
+.msg-action:focus-visible,
+.msg-action.done {
+  opacity: 1;
+}
+.msg-action:hover {
+  background: var(--oh-hover);
+  color: var(--vscode-foreground);
+}
+.msg-action.done {
+  color: var(--oh-ok);
 }
 .meta {
   display: flex;

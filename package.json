@@ -2,7 +2,7 @@
   "name": "opencode-hub",
   "displayName": "OpenCode Hub — BYOK AI Chat",
   "description": "Open-source chat for VS Code that works with opencode first, plus Claude Code, Codex (ChatGPT), GitHub Copilot and any OpenAI-compatible or Anthropic model with your own keys. Sessions, /commands, file attachments, MCP toggles, token usage stats and a 3D companion.",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "publisher": "rohit-chandra",
   "license": "MIT",
   "private": true,
@@ -56,8 +56,10 @@
         "opencodeHub.opencode.serverPassword",
         "opencodeHub.claudeCode.path",
         "opencodeHub.claudeCode.permissionMode",
+        "opencodeHub.claudeCode.auth",
         "opencodeHub.codex.path",
         "opencodeHub.codex.sandbox",
+        "opencodeHub.codex.auth",
         "opencodeHub.providers",
         "opencodeHub.mcp.servers",
         "opencodeHub.systemPrompt",
@@ -123,6 +125,12 @@
         "command": "opencodeHub.selectModel",
         "title": "Select Model…",
         "category": "OpenCode Hub"
+      },
+      {
+        "command": "opencodeHub.signIn",
+        "title": "Sign In / Manage Account (Claude, ChatGPT)…",
+        "category": "OpenCode Hub",
+        "icon": "$(account)"
       },
       {
         "command": "opencodeHub.manageProviders",
@@ -227,6 +235,11 @@
           "command": "opencodeHub.selectEngine",
           "when": "view == opencodeHub.chat",
           "group": "1_engine@1"
+        },
+        {
+          "command": "opencodeHub.signIn",
+          "when": "view == opencodeHub.chat",
+          "group": "1_engine@2"
         },
         {
           "command": "opencodeHub.manageProviders",
@@ -371,6 +384,19 @@
           "default": "",
           "markdownDescription": "Path to the `claude` executable. Leave empty to find it on `PATH`."
         },
+        "opencodeHub.claudeCode.auth": {
+          "type": "string",
+          "enum": [
+            "subscription",
+            "apiKey"
+          ],
+          "enumDescriptions": [
+            "Your Claude account (Pro / Max subscription), signed in with `claude auth login`. No per-token charges.",
+            "An Anthropic API key stored in VS Code Secret Storage (billed per token)."
+          ],
+          "default": "subscription",
+          "markdownDescription": "How Claude Code signs in. `subscription` (default) uses your Claude account and ignores `ANTHROPIC_API_KEY` in the environment so you are not billed per token by accident. Use `/login` in the chat to switch."
+        },
         "opencodeHub.claudeCode.permissionMode": {
           "type": "string",
           "enum": [
@@ -394,6 +420,19 @@
           "type": "string",
           "default": "",
           "markdownDescription": "Path to the `codex` executable. Leave empty to find it on `PATH`."
+        },
+        "opencodeHub.codex.auth": {
+          "type": "string",
+          "enum": [
+            "subscription",
+            "apiKey"
+          ],
+          "enumDescriptions": [
+            "Your ChatGPT account (Plus / Pro / Team plan), signed in with `codex login`. No per-token charges.",
+            "An OpenAI API key stored in VS Code Secret Storage (billed per token)."
+          ],
+          "default": "subscription",
+          "markdownDescription": "How Codex signs in. `subscription` (default) uses your ChatGPT account and ignores `CODEX_API_KEY` in the environment. Use `/login` in the chat to switch."
         },
         "opencodeHub.codex.sandbox": {
           "type": "string",

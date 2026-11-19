@@ -208,6 +208,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<Openco
   reg('opencodeHub.switchSession', () => controller.pickSession());
   reg('opencodeHub.selectEngine', () => controller.pickEngine());
   reg('opencodeHub.selectModel', () => controller.pickModel());
+  reg('opencodeHub.signIn', () => controller.accountMenu());
   reg('opencodeHub.manageProviders', () => controller.manageProviders());
   reg('opencodeHub.showMcp', async () => {
     await host.focusView();
@@ -257,6 +258,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<Openco
       if (e.affectsConfiguration(`${SECTION}.mcp`)) void mcp.sync();
       const providers = e.affectsConfiguration(`${SECTION}.providers`);
       if (providers || e.affectsConfiguration(`${SECTION}.avatar`) || e.affectsConfiguration(`${SECTION}.chat`)) controller.onConfigChanged(providers);
+      if (e.affectsConfiguration(`${SECTION}.claudeCode.auth`) || e.affectsConfiguration(`${SECTION}.codex.auth`)) controller.onAuthConfigChanged();
     }),
     vscode.workspace.onDidGrantWorkspaceTrust(() => void controller.onTrustChanged()),
     {

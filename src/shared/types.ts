@@ -186,6 +186,23 @@ export interface EngineStatus {
   version?: string;
 }
 
+/** How an engine that has its own account (Claude Code, Codex) is signed in. */
+export type AuthMode = 'subscription' | 'apiKey';
+
+export interface AuthStatus {
+  engine: EngineId;
+  /** What the user chose: their Claude / ChatGPT account (default) or an API key. */
+  mode: AuthMode;
+  /** `undefined` when the CLI could not tell (an older CLI, or an unusual setup). */
+  signedIn: boolean | undefined;
+  /** How requests are billed right now, when known. `apiKey` while `mode` is `subscription` is worth a warning. */
+  billing?: AuthMode;
+  /** Short description shown in the chat, e.g. "Claude account · you@example.com". */
+  label?: string;
+  /** Waiting for the sign-in that was started in a terminal. */
+  pending?: boolean;
+}
+
 export type SessionActivity = 'idle' | 'busy' | 'retry';
 
 export type EngineEvent =

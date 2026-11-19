@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.3.0
+
+### Added
+
+- A **Copy** button under every response. It copies the whole answer as Markdown (its text, without thinking or tool calls) and shows when the reply has finished.
+- Claude Code and Codex sign in with your account by default. Picking either engine shows **Sign in with Claude** or **Sign in with ChatGPT**, which runs `claude auth login --claudeai` or `codex login` in a terminal and opens the browser; the chat picks up the sign-in by itself. Codex also offers a device-code sign-in for remote machines.
+- **Use an API key instead** for both engines, with the key kept in VS Code Secret Storage. New settings `opencodeHub.claudeCode.auth` and `opencodeHub.codex.auth` (`subscription` by default, or `apiKey`).
+- `/login` and **OpenCode Hub: Sign In / Manage Account** to sign in, switch between the account and an API key, remove the key or sign out. `/providers` opens the same options for these two engines.
+- The signed-in account is shown on the start screen, and a warning appears when Codex or Claude Code is billing an API key while set to use your subscription.
+
+### Changed
+
+- In subscription mode, `ANTHROPIC_API_KEY` / `ANTHROPIC_AUTH_TOKEN` (Claude Code) and `CODEX_API_KEY` (Codex) are hidden from the CLI, so a key set in your shell for other tools can no longer silently switch you to per-token billing.
+- Messages are not sent while Claude Code or Codex is signed out; the chat asks you to sign in instead of failing.
+
 ## 0.2.0
 
 ### Added

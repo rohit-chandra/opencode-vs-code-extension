@@ -21,8 +21,8 @@ One chat, five interchangeable engines, and the same features on all of them: se
 |---|---|---|
 | **opencode** (default) | Your installed `opencode` CLI, started as a local server | Any opencode provider: API keys, or subscription logins such as ChatGPT Plus/Pro and GitHub Copilot through `opencode auth login` |
 | **Direct BYOK** | OpenAI-compatible and Anthropic APIs called directly | Your API keys, kept in VS Code Secret Storage. Local servers (Ollama, LM Studio, vLLM, llama.cpp) need no key |
-| **Claude Code** | Your installed `claude` CLI | Whatever that CLI is signed in with (Claude subscription or API key) |
-| **Codex** | Your installed `codex` CLI | Whatever that CLI is signed in with (ChatGPT subscription or API key) |
+| **Claude Code** | Your installed `claude` CLI | Your Claude account (Pro / Max) by default; an Anthropic API key if you choose it |
+| **Codex** | Your installed `codex` CLI | Your ChatGPT account (Plus / Pro / Team) by default; an OpenAI API key if you choose it |
 | **Copilot / VS Code models** | VS Code's Language Model API | Your GitHub Copilot subscription, plus models other extensions register |
 
 Switch at any time with `/engine` or the engine button under the message box. Each engine keeps its own sessions and model choice per workspace.
@@ -126,8 +126,10 @@ For a local server such as Ollama or LM Studio, start the server first; no key i
 <summary><b>Claude Code</b></summary>
 
 1. `npm install -g @anthropic-ai/claude-code`
-2. Run `claude` once in a terminal and sign in.
-3. In the chat: `/engine`, then **Claude Code**.
+2. In the chat: `/engine`, then **Claude Code**.
+3. Click **Sign in with Claude**. A terminal runs `claude auth login --claudeai` and your browser opens; sign in with your Claude account. The chat notices when you are done.
+
+Your Claude Pro or Max plan is used, not per-token API billing. In this mode the extension also hides `ANTHROPIC_API_KEY` from the CLI, so a key set in your shell for other tools cannot quietly take over. To use an API key instead, click **Use an API key instead** (or `/login`); the key is kept in VS Code Secret Storage. `/login` switches back at any time.
 
 </details>
 
@@ -135,8 +137,10 @@ For a local server such as Ollama or LM Studio, start the server first; no key i
 <summary><b>Codex</b> (ChatGPT)</summary>
 
 1. `npm install -g @openai/codex`
-2. Run `codex login` in a terminal.
-3. In the chat: `/engine`, then **Codex (ChatGPT)**.
+2. In the chat: `/engine`, then **Codex (ChatGPT)**.
+3. Click **Sign in with ChatGPT**. A terminal runs `codex login` and your browser opens; sign in with your ChatGPT account. On a remote machine (SSH, WSL, a container) use **Use a device code** instead.
+
+Your ChatGPT Plus or Pro plan is used, not per-token API billing; `CODEX_API_KEY` is hidden from the CLI in this mode. If Codex was signed in with an API key earlier, the chat says so and offers the ChatGPT sign-in. **Use an API key instead** (or `/login`) switches to a key kept in VS Code Secret Storage.
 
 </details>
 
@@ -207,6 +211,7 @@ Type `/` to see every command, filtered as you type. Commands defined by the eng
 | `/mcp` | Show MCP servers with their status and a toggle each |
 | `/usage` | Token usage for this session and overall |
 | `/attach` | Attach files |
+| `/login` | Claude Code and Codex: sign in with your Claude / ChatGPT account, use an API key, or sign out |
 | `/providers` | Connect providers and manage API keys |
 | `/compact`, `/undo`, `/redo`, `/share`, `/unshare`, `/fork` | Session tools, where the engine supports them |
 | `/rename <title>`, `/export` | Rename the session, or save it as Markdown |
@@ -418,7 +423,9 @@ Measured with the UI test suite (headless Chrome, software rendering): a reply s
 | `opencodeHub.opencode.serverPassword` | | Password of that server |
 | `opencodeHub.providers` | `[]` | Direct BYOK providers (no keys here) |
 | `opencodeHub.mcp.servers` | `{}` | MCP servers for Direct BYOK and Copilot |
+| `opencodeHub.claudeCode.auth` | `subscription` | `subscription` (your Claude account) or `apiKey` (a key in Secret Storage) |
 | `opencodeHub.claudeCode.path`, `.permissionMode`, `.models` | `acceptEdits` | Claude Code CLI location, permission mode, extra model names |
+| `opencodeHub.codex.auth` | `subscription` | `subscription` (your ChatGPT account) or `apiKey` (a key in Secret Storage) |
 | `opencodeHub.codex.path`, `.sandbox`, `.models` | `workspace-write` | Codex CLI location, sandbox policy, extra model names |
 | `opencodeHub.avatar.enabled`, `.style` | `true`, `buddy` | Companion on/off, and `buddy` (the character) or `dots` |
 | `opencodeHub.chat.zoom` | `1` | Text size of the chat, from `0.8` to `1.6` |
@@ -437,7 +444,7 @@ A custom provider looks like this:
 
 ## Security and privacy
 
-- API keys for Direct BYOK live in VS Code Secret Storage (your OS keychain), never in settings files. opencode, Claude Code and Codex keep their own credentials; the extension does not read them.
+- API keys for Direct BYOK, and for Claude Code or Codex in API-key mode, live in VS Code Secret Storage (your OS keychain), never in settings files. Account logins (Claude, ChatGPT, opencode) stay with each CLI; the extension only asks the CLI whether it is signed in (`claude auth status`, `codex login status`) and does not read the credentials.
 - The opencode server the extension starts listens on `127.0.0.1` only and is protected with a random password for each run.
 - Your prompts and attachments go only to the engine and model you selected. The extension has no telemetry and makes no other network requests.
 - Model output is sanitized before it is shown. The chat view loads no remote content.

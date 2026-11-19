@@ -1,5 +1,7 @@
 import type {
   AgentInfo,
+  AuthMode,
+  AuthStatus,
   ChatMessage,
   EngineCapabilities,
   EngineEvent,
@@ -83,6 +85,23 @@ export interface Engine {
   redo?(sessionId: string): Promise<void>;
   /** opencode only: store an API key for one of its providers. */
   setProviderApiKey?(providerId: string, apiKey: string): Promise<void>;
+  /** Engines whose CLI has its own account (Claude Code, Codex). */
+  account?: EngineAccount;
+}
+
+/** Sign-in for engines that drive a CLI with its own account (Claude Code, Codex). */
+export interface EngineAccount {
+  /** Display name of the account, e.g. "Claude" or "ChatGPT". */
+  readonly accountName: string;
+  /** Settings key (under `opencodeHub.`) that holds the chosen `AuthMode`. */
+  readonly modeSetting: string;
+  mode(): AuthMode;
+  status(): Promise<AuthStatus>;
+  /** Shell command that signs in with the account in a terminal (opens the browser). */
+  loginCommand(options?: { deviceCode?: boolean }): string;
+  logoutCommand(): string;
+  /** Secret Storage key of the API key used in `apiKey` mode. */
+  readonly secretKey: string;
 }
 
 export class EngineError extends Error {

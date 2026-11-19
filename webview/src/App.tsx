@@ -8,7 +8,8 @@ import type { PanelName } from './components/Panels';
 import { Requests } from './components/Requests';
 import { compact, money, tokensIn, tokensOut } from './format';
 import { deriveMood, moodDeadline, useStore, useTick } from './hooks';
-import { IconChart, IconChevron, IconClose, IconEye, IconHistory, IconPlug, IconPlus, IconRefresh, IconWarn } from './icons';
+import { IconChart, IconChevron, IconClose, IconEye, IconHistory, IconKey, IconPlug, IconPlus, IconRefresh, IconUser, IconWarn } from './icons';
+import type { ViewState } from '../../src/shared/protocol';
 import { send } from './store';
 
 const SUGGESTIONS = [
@@ -16,6 +17,72 @@ const SUGGESTIONS = [
   { label: 'See every command', text: '/help' },
   { label: 'Check connected tools', text: '/mcp' },
 ];
+
+const ACCOUNT: Partial<Record<ViewState['engine'], { name: string; plan: string; vendor: string }>> = {
+  'claude-code': { name: 'Claude', plan: 'Claude Pro or Max plan', vendor: 'Anthropic' },
+  codex: { name: 'ChatGPT', plan: 'ChatGPT Plus or Pro plan', vendor: 'OpenAI' },
+};
+
+/** Whether the active engine needs the user to sign in (or fix how it is billed) before chatting. */
+function needsAccount(s: ViewState): boolean {
+  const a = s.auth;
+  if (!a || !ACCOUNT[s.engine]) return false;
+  if (a.pending) return true;
+  if (a.signedIn === false) return true;
+  return a.mode === 'subscription' && a.signedIn === true && a.billing === 'apiKey';
+}
+
+/** Sign-in prompt for Claude Code and Codex: the account (subscription) first, an API key as the alternative. */
+function AccountPrompt({ s, bar }: { s: ViewState; bar?: boolean }) {
+  const a = s.auth!;
+  const acc = ACCOUNT[s.engine]!;
+  const label = ENGINE_LABELS[s.engine];
+  const apiKeyMode = a.mode === 'apiKey';
+  const billingKey = a.mode === 'subscription' && a.signedIn === true && a.billing === 'apiKey';
+  const title = a.pending ? `Waiting for your ${acc.name} sign-in…` : apiKeyMode ? `Add an API key for ${label}` : billingKey ? `${label} is using an API key` : `Sign in to ${label} with your ${acc.name} account`;
+  const text = a.pending
+    ? 'Finish signing in in the browser window that opened (the terminal shows the link if it did not). This updates by itself.'
+    : apiKeyMode
+      ? `${label} is set to use an API key, billed per token by ${acc.vendor}. Signing in with your ${acc.name} account uses your ${acc.plan} instead.`
+      : billingKey
+        ? `${a.label ? `${a.label}. ` : ''}That is billed per token. Sign in with your ${acc.name} account to use your ${acc.plan} instead.`
+        : `Uses your ${acc.plan}: no API key and no per-token charges.`;
+  return (
+    <div class={`callout account ${bar ? 'auth-bar' : ''} ${a.pending ? 'pending' : ''}`} role="region" aria-label="Account">
+      {a.pending ? <span class="spinner" /> : <IconUser size={15} />}
+      <div>
+        <p class="callout-title">{title}</p>
+        <p>{text}</p>
+        <div class="callout-actions">
+          {apiKeyMode ? (
+            <>
+              <button type="button" class="btn primary" onClick={() => send({ type: 'useApiKey' })}>
+                <IconKey size={12} /> Add API key
+              </button>
+              <button type="button" class="btn" onClick={() => send({ type: 'signIn' })}>
+                Sign in with {acc.name} instead
+              </button>
+            </>
+          ) : (
+            <>
+              <button type="button" class={`btn ${a.pending ? '' : 'primary'}`} onClick={() => send({ type: 'signIn' })}>
+                {a.pending ? 'Open sign-in again' : `Sign in with ${acc.name}`}
+              </button>
+              {s.engine === 'codex' && (
+                <button type="button" class="btn quiet" title="For remote, SSH, WSL or container setups" onClick={() => send({ type: 'signIn', deviceCode: true })}>
+                  Use a device code
+                </button>
+              )}
+              <button type="button" class="btn quiet" onClick={() => send({ type: 'useApiKey' })}>
+                Use an API key instead
+              </button>
+            </>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
 
 export function App() {
   const s = useStore();
@@ -167,12 +234,21 @@ export function App() {
                   <p>Agents can read files and run tools here, so chat stays off until you trust this workspace.</p>
                 </div>
               </div>
+            ) : needsAccount(s) ? (
+              <AccountPrompt s={s} />
             ) : (
               <>
                 <p class="welcome-line">
                   Chatting through {ENGINE_LABELS[s.engine]}
                   {s.model ? ` with ${s.model.modelId}` : ''}. Type <kbd>/</kbd> for commands or <kbd>@</kbd> to attach a file.
                 </p>
+                {s.auth?.signedIn && (
+                  <button type="button" class="account-chip" title="Sign-in options" onClick={() => send({ type: 'accountMenu' })}>
+                    {s.auth.billing === 'apiKey' ? <IconKey size={12} /> : <IconUser size={12} />}
+                    <span>{s.auth.label ?? 'Signed in'}</span>
+                    <span class="account-change">Change</span>
+                  </button>
+                )}
                 <div class="suggestions">
                   {SUGGESTIONS.map((x) => (
                     <button type="button" class="suggestion" key={x.label} onClick={() => send({ type: 'send', text: x.text })}>
@@ -186,6 +262,8 @@ export function App() {
         ) : (
           <MessageList messages={s.messages} busy={busy} canRetry={s.canRetry} />
         )}
+
+        {!empty && needsAccount(s) && <AccountPrompt s={s} bar />}
 
         {!s.avatar.enabled && busy && (
           <div class="status-line" aria-live="polite">

@@ -1,8 +1,8 @@
-import { spawn } from 'node:child_process';
 import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import * as path from 'node:path';
 import type { Engine } from '../../src/core/engine';
+import { killTree, spawnCli } from '../../src/core/process';
 import { UsageLedger } from '../../src/core/usageLedger';
 import { ClaudeCodeEngine } from '../../src/engines/cli/claudeCode';
 import { CodexEngine } from '../../src/engines/cli/codex';
@@ -564,7 +564,8 @@ describe.skipIf(!bin)('ChatController with the real opencode engine', () => {
     // auth.json. A second opencode process in the same data folder stands in for the
     // terminal where the user ran `opencode auth login`.
     const already = host.view!.providers.some((p) => p.id === 'deepseek');
-    const other = spawn(bin!, ['serve', '--hostname', '127.0.0.1', '--port', '0'], { cwd: project.dir, env: project.env });
+    // spawnCli: on Windows npm installs opencode as a .cmd shim, which needs a shell.
+    const other = spawnCli(bin!, ['serve', '--hostname', '127.0.0.1', '--port', '0'], { cwd: project.dir, env: project.env });
     try {
       const url = await new Promise<string>((resolve, reject) => {
         let out = '';
@@ -597,7 +598,7 @@ describe.skipIf(!bin)('ChatController with the real opencode engine', () => {
       // Providers from opencode.json are still listed next to the integration ones.
       expect(v.providers.some((p) => p.id === 'mock')).toBe(true);
     } finally {
-      other.kill();
+      killTree(other);
     }
   });
 

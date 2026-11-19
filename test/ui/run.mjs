@@ -50,8 +50,19 @@ async function open(theme = 'dark', width = 400, height = 760) {
   page.on('pageerror', (e) => consoleErrors.push(String(e)));
   await page.goto(`${origin}/?theme=${theme}`);
   await page.waitForFunction(() => window.__posted.some((m) => m.type === 'ready'));
-  const host = (m) => page.evaluate((msg) => window.__host(msg), m);
-  const posted = (type) => page.evaluate((t) => window.__posted.filter((m) => !t || m.type === t), type);
+  // The webview renders at most once per animation frame, and effects run after paint. Give
+  // both a chance before the test looks, so slow CI runners see the same thing as fast laptops.
+  const host = (m) =>
+    page.evaluate(async (msg) => {
+      window.__host(msg);
+      await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+    }, m);
+  const posted = (type) =>
+    page.evaluate(async (t) => {
+      const pick = () => window.__posted.filter((m) => !t || m.type === t);
+      for (let i = 0; i < 25 && t && pick().length === 0; i++) await new Promise((r) => setTimeout(r, 20));
+      return pick();
+    }, type);
   const clearPosted = () => page.evaluate(() => (window.__posted.length = 0));
   const shot = (name) => page.screenshot({ path: path.join(outDir, `${name}.png`) });
   const text = (sel) => page.$eval(sel, (el) => el.textContent);

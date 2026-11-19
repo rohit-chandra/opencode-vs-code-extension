@@ -27,7 +27,7 @@ export default tseslint.config(
   },
   {
     files: ['test/**/*.ts', 'test/**/*.mjs', 'scripts/**/*.mjs', '*.mjs', '*.mts'],
-    languageOptions: { globals: { console: 'readonly', process: 'readonly', setTimeout: 'readonly', clearTimeout: 'readonly', URL: 'readonly', URLSearchParams: 'readonly', Buffer: 'readonly', fetch: 'readonly', window: 'readonly', document: 'readonly', getComputedStyle: 'readonly', Image: 'readonly', DataTransfer: 'readonly', File: 'readonly', ClipboardEvent: 'readonly', DragEvent: 'readonly', AbortSignal: 'readonly', PerformanceObserver: 'readonly', performance: 'readonly' } },
+    languageOptions: { globals: { console: 'readonly', process: 'readonly', setTimeout: 'readonly', clearTimeout: 'readonly', URL: 'readonly', URLSearchParams: 'readonly', Buffer: 'readonly', fetch: 'readonly', window: 'readonly', document: 'readonly', getComputedStyle: 'readonly', Image: 'readonly', DataTransfer: 'readonly', File: 'readonly', ClipboardEvent: 'readonly', DragEvent: 'readonly', AbortSignal: 'readonly', PerformanceObserver: 'readonly', performance: 'readonly', requestAnimationFrame: 'readonly' } },
     rules: { 'no-console': 'off' },
   },
 );

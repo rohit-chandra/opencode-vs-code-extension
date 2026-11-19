@@ -1,3 +1,4 @@
+import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import * as path from 'node:path';
 import type { Engine } from '../../src/core/engine';
@@ -509,6 +510,29 @@ describe.skipIf(!bin)('ChatController with the real opencode engine', () => {
     expect(text).toMatch(/\| opencode.*\| ready \|/);
     expect(text).toMatch(/\| Claude Code \|/);
     expect(mock.log.length).toBe(calls);
+  });
+
+  it('shows the models of a subscription signed in from a terminal, without a restart', async () => {
+    // What `opencode auth login` writes after a ChatGPT sign-in, from its own process, while
+    // the server the extension started keeps running.
+    const engine = engines.get('opencode') as OpencodeEngine;
+    const file = engine.credentialsFile();
+    expect(file).toBe(path.join(project.env.XDG_DATA_HOME!, 'opencode', 'auth.json'));
+    expect(host.view!.providers.some((p) => p.id === 'openai' && p.models.length > 0)).toBe(false);
+    const model = host.view!.model;
+    mkdirSync(path.dirname(file), { recursive: true });
+    writeFileSync(file, JSON.stringify({ openai: { type: 'oauth', refresh: 'r', access: 'a', expires: Date.now() + 3_600_000 } }));
+    try {
+      const v = await host.until((x) => x.providers.some((p) => p.id === 'openai' && p.models.length > 0), 20_000, 'OpenAI models after the terminal sign-in');
+      expect(v.providers.find((p) => p.id === 'openai')!.models.some((m) => /gpt/i.test(m.modelId))).toBe(true);
+      expect(v.notice?.text).toMatch(/^Connected: OpenAI \(\d+ models\)/);
+      // The model the user had picked stays picked.
+      expect(v.model).toEqual(model);
+    } finally {
+      // Signing out in the terminal takes the models away again.
+      rmSync(file, { force: true });
+      await host.until((x) => !x.providers.some((p) => p.id === 'openai' && p.models.length > 0), 20_000, 'OpenAI gone after sign-out');
+    }
   });
 
   it('explains what to do when an engine is not installed', async () => {

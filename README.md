@@ -113,7 +113,7 @@ You need one of these. The chat tells you when the selected engine is missing an
    opencode auth login
    ```
 
-   This is also where subscription logins (for example ChatGPT or GitHub Copilot) are set up, when your opencode version offers them.
+   This is also where subscription logins (for example ChatGPT or GitHub Copilot) are set up, when your opencode version offers them. The models appear in the chat as soon as the sign-in finishes, whether you started it from the chat or in your own terminal; no restart is needed.
 4. Back in VS Code, run **OpenCode Hub: Restart Active Engine**, then choose a model with the model button under the message box.
 
 The extension looks for the CLIs on your `PATH` and in the usual install locations (Homebrew, nvm, Volta, fnm, asdf, mise, pnpm, bun, `~/.local/bin`, npm's global folder on Windows, and more), so an editor started from the macOS Dock or a Linux launcher finds them too. If `opencode` is installed somewhere else, set `opencodeHub.opencode.path` to the full path of the executable. `/doctor` shows what was found.

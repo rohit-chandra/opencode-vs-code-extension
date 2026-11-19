@@ -78,6 +78,8 @@ export class ChatController {
   /** Engine whose sign-in was started in a terminal and is being waited for. */
   private signInPending: EngineId | undefined;
   private signInTimer: ReturnType<typeof setTimeout> | undefined;
+  /** Engine whose providers `state.providers` holds, to tell a new connection from an engine switch. */
+  private catalogEngine: EngineId | undefined;
   /** Renderer the webview's companion is using, once it has mounted. */
   avatarRenderer: 'webgl' | '2d' | undefined;
 
@@ -241,6 +243,13 @@ export class ChatController {
       engine.listCommands().catch(() => []),
     ]);
     if (engine !== this.engine) return;
+    // A provider that became usable since the last listing (a sign-in in a terminal, a key): say so.
+    if (this.catalogEngine === engine.id) {
+      const before = new Set(this.state.providers.filter((p) => p.models.length > 0).map((p) => p.id));
+      const added = providers.filter((p) => p.models.length > 0 && !before.has(p.id));
+      if (added.length) this.notify('info', `Connected: ${added.map((p) => `${p.name} (${p.models.length} model${p.models.length === 1 ? '' : 's'})`).join(', ')}. Pick one with the model button.`);
+    }
+    this.catalogEngine = engine.id;
     let model = this.host.state.get<ModelRef>(`model.${engine.id}`);
     const exists = (m: ModelRef | undefined) => !!m && providers.some((p) => p.id === m.providerId && p.models.some((x) => x.modelId === m.modelId));
     if (!exists(model)) {
@@ -964,7 +973,7 @@ export class ChatController {
       if (choice === 'key') return this.connectOpencodeProvider();
       if (choice === 'login') {
         this.host.runInTerminal('opencode auth', `${quoteIfNeeded(this.host.config<string>('opencode.path', '') || 'opencode')} auth login`);
-        this.notify('info', 'Finish signing in in the terminal, then run "OpenCode Hub: Restart Active Engine".');
+        this.notify('info', 'Finish signing in in the terminal. The new models show up here by themselves.');
         return;
       }
       if (choice !== 'direct') return;

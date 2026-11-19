@@ -1,3 +1,6 @@
+import * as path from 'node:path';
+import * as os from 'node:os';
+import { promises as fs } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 import { Emitter } from '../../core/emitter';
 import type { Disposable } from '../../core/emitter';
@@ -36,6 +39,9 @@ interface OcEvent {
  * opencode owns sessions, tools, permissions, MCP and provider credentials; this class
  * only translates between its API and the normalized model in `shared/types`.
  */
+/** How often the credentials file is checked for a sign-in made outside the extension. */
+const CREDENTIAL_POLL_MS = 1500;
+
 export class OpencodeEngine implements Engine {
   readonly id = 'opencode' as const;
   readonly capabilities: EngineCapabilities = {
@@ -61,6 +67,8 @@ export class OpencodeEngine implements Engine {
   /** Role of each message we have seen, so part events can be attributed. */
   private roles = new Map<string, 'user' | 'assistant'>();
   private lastUserMessage = new Map<string, string>();
+  /** Watches opencode's credentials file, so a sign-in made in a terminal shows up here. */
+  private credentialWatch: ReturnType<typeof setInterval> | undefined;
 
   constructor(private readonly ctx: EngineContext) {}
 
@@ -97,6 +105,7 @@ export class OpencodeEngine implements Engine {
         this.setStatus('unavailable', reason);
       });
       this.listen();
+      if (this.server.owned) await this.watchCredentials();
       return this.setStatus('ready');
     } catch (err) {
       this.teardown();
@@ -112,7 +121,68 @@ export class OpencodeEngine implements Engine {
     return this.start();
   }
 
+  /**
+   * Where opencode keeps its provider credentials: `$XDG_DATA_HOME/opencode/auth.json`,
+   * or `~/.local/share/opencode/auth.json`, on every platform (Windows included).
+   */
+  credentialsFile(): string {
+    const env = this.ctx.env ?? process.env;
+    const data = env.XDG_DATA_HOME || path.join(env.HOME || env.USERPROFILE || os.homedir(), '.local', 'share');
+    return path.join(data, 'opencode', 'auth.json');
+  }
+
+  /**
+   * `opencode auth login` (subscription logins such as ChatGPT or GitHub Copilot, and API
+   * keys) runs in a terminal as its own process and writes the credentials file. The server
+   * we started read that file when it started and does not notice the change, so its model
+   * list stays as it was. Watch the file and, when it changes, make the server reload its
+   * providers and tell the chat to list the models again.
+   */
+  private async watchCredentials(): Promise<void> {
+    this.stopCredentialWatch();
+    const file = this.credentialsFile();
+    const fingerprint = async () => {
+      try {
+        const st = await fs.stat(file);
+        return `${st.mtimeMs}:${st.size}`;
+      } catch {
+        return 'missing';
+      }
+    };
+    let last = await fingerprint();
+    let busy = false;
+    const timer = setInterval(() => {
+      if (busy) return;
+      busy = true;
+      void fingerprint()
+        .then(async (now) => {
+          if (now === last || timer !== this.credentialWatch) return;
+          last = now;
+          this.ctx.log.info(`opencode credentials changed (${file}); reloading providers`);
+          await this.reloadProviders();
+        })
+        .finally(() => (busy = false));
+    }, CREDENTIAL_POLL_MS);
+    timer.unref?.();
+    this.credentialWatch = timer;
+  }
+
+  private stopCredentialWatch(): void {
+    if (this.credentialWatch) clearInterval(this.credentialWatch);
+    this.credentialWatch = undefined;
+  }
+
+  /** Make the running server read its credentials again, then have the chat list models again. */
+  async reloadProviders(): Promise<void> {
+    if (!this.client) return;
+    await this.api()
+      .post('instance/dispose')
+      .catch((err) => this.ctx.log.warn(`opencode could not reload its providers: ${errorMessage(err)}`));
+    this.emitter.fire({ type: 'catalog.changed' });
+  }
+
   private teardown(): void {
+    this.stopCredentialWatch();
     this.sseAbort?.abort();
     this.sseAbort = undefined;
     this.server?.stop();
@@ -336,10 +406,7 @@ export class OpencodeEngine implements Engine {
   async setProviderApiKey(providerId: string, apiKey: string): Promise<void> {
     await this.api().request('PUT', `auth/${encodeURIComponent(providerId)}`, { body: { type: 'api', key: apiKey } });
     // Make the running instance pick up the new credential.
-    await this.api()
-      .post('instance/dispose')
-      .catch(() => undefined);
-    this.emitter.fire({ type: 'catalog.changed' });
+    await this.reloadProviders();
   }
 
   async defaultModel(): Promise<ModelRef | undefined> {

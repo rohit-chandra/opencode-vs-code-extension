@@ -24,6 +24,7 @@
 
 ### Fixed
 
+- **opencode: models from a subscription signed in in a terminal now appear by themselves.** After `opencode auth login` (ChatGPT Plus/Pro, GitHub Copilot or an API key), the running opencode server kept its old provider list until the engine was restarted, so the new models never showed up. The extension now notices the sign-in (or sign-out), has opencode reload its providers, and says which provider connected and how many models it brought.
 - Text attachments with no file on disk (a file dropped from outside VS Code) reached the opencode engine as a path it could not read.
 
 ### For maintainers

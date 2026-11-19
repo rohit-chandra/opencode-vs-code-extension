@@ -73,7 +73,8 @@ await test('empty state: welcome copy, suggestions and a live 3D companion', asy
   const t = await open();
   await t.host({ type: 'state', state: base });
   await t.page.waitForSelector('.welcome-line');
-  assert.match(await t.text('.stage-caption'), /What are we building\?/);
+  // The first paint can still show the start-up state; wait for the real one.
+  await t.page.waitForFunction(() => /What are we building\?/.test(document.querySelector('.stage-caption')?.textContent ?? ''));
   assert.match(await t.text('.welcome-line'), /Chatting through opencode with claude-sonnet-5-5/);
   assert.equal(await t.text('.session-title'), 'New session');
   // The companion bundle loads lazily and must render real WebGL frames.

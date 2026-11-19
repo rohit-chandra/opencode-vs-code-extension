@@ -394,7 +394,7 @@ describe.skipIf(!bin)('ChatController with the real opencode engine', () => {
   it('offers the terminal sign-in for subscription logins', async () => {
     host.pickByLabel(/Sign in with a subscription/);
     await controller.manageProviders();
-    expect(host.terminals.pop()!.command).toMatch(/opencode"? auth login$/);
+    expect(host.terminals.pop()!.command).toMatch(/opencode(\.cmd|\.exe)?"? auth login$/i); // npm installs a .cmd shim on Windows
   });
 
   it('persists the usage ledger and resets it on request', async () => {

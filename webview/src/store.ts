@@ -31,7 +31,8 @@ const EMPTY: ViewState = {
   questions: [],
   sessionUsage: undefined,
   usage: undefined,
-  avatar: { enabled: true, style: 'bot' },
+  avatar: { enabled: true, style: 'buddy' },
+  zoom: 1,
   trusted: true,
   panel: { name: 'none', nonce: 0 },
   notice: undefined,
@@ -45,6 +46,10 @@ class Store {
   state: ViewState = EMPTY;
   /** Timestamp of the last streamed text chunk; drives the avatar's "speaking" mood. */
   lastDelta = 0;
+  /** Last keystroke in the message box; drives the "listening" mood. */
+  typingAt = 0;
+  /** Last pointer or keyboard activity anywhere in the view; Oki dozes off without any. */
+  lastInteraction = Date.now();
   private listeners = new Set<Listener>();
   private fileWaiters = new Map<number, (files: { path: string; relative: string }[]) => void>();
   private requestId = 0;
@@ -60,8 +65,29 @@ class Store {
     return () => this.hostListeners.delete(l);
   }
 
+  private scheduled = false;
+  /**
+   * Notify subscribers at most once per animation frame. A fast model can deliver dozens of
+   * chunks between two frames; rendering each one separately would only burn CPU.
+   */
   private emit(): void {
-    for (const l of [...this.listeners]) l();
+    if (this.scheduled) return;
+    this.scheduled = true;
+    const flush = () => {
+      this.scheduled = false;
+      for (const l of [...this.listeners]) l();
+    };
+    if (document.hidden) setTimeout(flush, 0);
+    else requestAnimationFrame(flush);
+  }
+
+  /** Mark the user as typing (throttled re-render so the companion can react). */
+  typing(): void {
+    const now = Date.now();
+    const wasTyping = now - this.typingAt < 1600;
+    this.typingAt = now;
+    this.lastInteraction = now;
+    if (!wasTyping) this.emit();
   }
 
   receive(msg: HostToWebview): void {
@@ -72,10 +98,14 @@ class Store {
       case 'patch':
         this.state = { ...this.state, ...msg.patch };
         break;
-      case 'event': {
+      case 'event':
+      case 'events': {
         if (!this.state.sessionId) return;
-        if (msg.event.type === 'part.delta' || msg.event.type === 'part.updated') this.lastDelta = Date.now();
-        const messages = applyMessageEvent(this.state.messages, msg.event, this.state.sessionId);
+        let messages = this.state.messages;
+        for (const event of msg.type === 'event' ? [msg.event] : msg.events) {
+          if (event.type === 'part.delta' || event.type === 'part.updated') this.lastDelta = Date.now();
+          messages = applyMessageEvent(messages, event, this.state.sessionId);
+        }
         if (messages === this.state.messages) return;
         this.state = { ...this.state, messages };
         break;
@@ -109,3 +139,4 @@ class Store {
 
 export const store = new Store();
 window.addEventListener('message', (e: MessageEvent<HostToWebview>) => store.receive(e.data));
+for (const type of ['pointerdown', 'keydown', 'wheel'] as const) window.addEventListener(type, () => (store.lastInteraction = Date.now()), { passive: true });

@@ -120,11 +120,22 @@ export function SessionsPanel({ s, onClose }: { s: ViewState; onClose: () => voi
 
 /* ------------------------------------------------------------------ models */
 
+const MAX_MODEL_ROWS = 150;
+
 export function ModelsPanel({ s, onClose }: { s: ViewState; onClose: () => void }) {
   const [query, setQuery] = useState('');
   const q = query.trim().toLowerCase();
+  // Some engines offer thousands of models; render a bounded list and let search narrow it down.
+  let room = MAX_MODEL_ROWS;
+  let hidden = 0;
   const groups = s.providers
-    .map((p) => ({ ...p, models: p.models.filter((m) => !q || m.name.toLowerCase().includes(q) || m.modelId.toLowerCase().includes(q) || p.name.toLowerCase().includes(q)) }))
+    .map((p) => {
+      const matches = p.models.filter((m) => !q || m.name.toLowerCase().includes(q) || m.modelId.toLowerCase().includes(q) || p.name.toLowerCase().includes(q));
+      const shown = matches.slice(0, Math.max(0, room));
+      room -= shown.length;
+      hidden += matches.length - shown.length;
+      return { ...p, models: shown };
+    })
     .filter((p) => p.models.length > 0);
   return (
     <Sheet
@@ -163,6 +174,7 @@ export function ModelsPanel({ s, onClose }: { s: ViewState; onClose: () => void 
           </ul>
         </section>
       ))}
+      {hidden > 0 && <p class="sheet-foot">{hidden} more not shown. Type to search.</p>}
     </Sheet>
   );
 }

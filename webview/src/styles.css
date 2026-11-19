@@ -42,7 +42,8 @@ body {
   padding: 0;
   color: var(--vscode-foreground);
   font-family: var(--vscode-font-family);
-  font-size: var(--vscode-font-size, 13px);
+  /* --oh-zoom is the user's chat text scale (OpenCode Hub: Increase/Decrease Chat Text Size). */
+  font-size: calc(var(--vscode-font-size, 13px) * var(--oh-zoom, 1));
   line-height: 1.5;
   overflow: hidden;
 }
@@ -173,12 +174,28 @@ p {
   padding: 4px 12px;
   border-bottom: 1px solid var(--oh-border);
 }
+.stage {
+  position: relative;
+}
 .stage-oki {
   flex: none;
-  width: 60px;
-  height: 60px;
-  border-radius: 50%;
-  transition: width 0.35s ease, height 0.35s ease;
+  width: 72px;
+  height: 72px;
+  border-radius: 16px;
+  transition: width 0.3s ease, height 0.3s ease;
+}
+.stage-swap {
+  position: absolute;
+  top: 4px;
+  right: 6px;
+  width: 22px;
+  height: 22px;
+  opacity: 0;
+  color: var(--oh-muted);
+}
+.stage:hover .stage-swap,
+.stage-swap:focus-visible {
+  opacity: 1;
 }
 .oki {
   width: 100%;
@@ -208,8 +225,8 @@ p {
   border-bottom: 0;
 }
 .is-empty .stage-oki {
-  width: min(190px, 52vw);
-  height: min(190px, 52vw);
+  width: min(210px, 58vw);
+  height: min(210px, 58vw);
 }
 .is-empty .stage-caption {
   font-size: 1.35em;
@@ -234,7 +251,7 @@ p {
   font-size: 1.35em;
   font-weight: 600;
 }
-.welcome-line {
+.welcome > .welcome-line {
   color: var(--oh-muted);
   max-width: 34em;
 }
@@ -245,7 +262,7 @@ kbd {
   border: 1px solid var(--oh-border);
   border-radius: 3px;
 }
-.suggestions {
+.welcome > .suggestions {
   display: flex;
   flex-direction: column;
   gap: 6px;
@@ -261,7 +278,7 @@ kbd {
   background: var(--oh-hover);
   border-color: var(--oh-accent);
 }
-.callout {
+.welcome > .callout {
   display: flex;
   gap: 10px;
   text-align: left;
@@ -299,11 +316,26 @@ kbd {
   gap: 14px;
   scrollbar-gutter: stable;
 }
+/* On a wide view (editor tab, large side bar) the conversation stays a readable column. */
+.msg,
+.welcome > *,
+.composer > *,
+.requests > * {
+  width: 100%;
+  max-width: 880px;
+  margin-inline: auto;
+}
 .msg {
   display: flex;
   flex-direction: column;
   gap: 7px;
   min-width: 0;
+  /* Off-screen messages skip layout and paint; long sessions stay as quick as short ones. */
+  content-visibility: auto;
+  contain-intrinsic-size: auto 90px;
+}
+.msg:last-child {
+  content-visibility: visible;
 }
 .msg.user {
   align-items: flex-end;
@@ -382,11 +414,8 @@ kbd {
   overflow-wrap: anywhere;
   min-width: 0;
 }
-.md > :first-child {
+.mdb > :first-child {
   margin-top: 0;
-}
-.md > :last-child {
-  margin-bottom: 0;
 }
 .md p,
 .md ul,
@@ -396,11 +425,17 @@ kbd {
 .md .code {
   margin: 0 0 9px;
 }
+.mdb:last-child > :last-child {
+  margin-bottom: 0;
+}
+.mdb:first-child > :first-child {
+  margin-top: 0;
+}
 .md h1,
 .md h2,
 .md h3,
 .md h4 {
-  margin: 14px 0 6px;
+  margin: 12px 0 6px;
   line-height: 1.3;
   font-weight: 600;
 }
@@ -488,7 +523,7 @@ kbd {
   padding: 8px 10px;
   overflow-x: auto;
   font-family: var(--vscode-editor-font-family, monospace);
-  font-size: var(--vscode-editor-font-size, 0.93em);
+  font-size: calc(var(--vscode-editor-font-size, 12px) * var(--oh-zoom, 1));
   line-height: 1.45;
   tab-size: 2;
 }
@@ -830,9 +865,16 @@ kbd {
   position: relative;
   flex: none;
   padding: 8px 10px 8px;
+  display: flex;
+  flex-direction: column;
 }
 .attachments {
   margin-bottom: 6px;
+}
+.composer > .popup {
+  width: auto;
+  max-width: none;
+  margin-inline: 0;
 }
 .input-box {
   display: flex;

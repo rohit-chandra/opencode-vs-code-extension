@@ -7,8 +7,8 @@ import { McpPanel, ModelsPanel, SessionsPanel, UsagePanel } from './components/P
 import type { PanelName } from './components/Panels';
 import { Requests } from './components/Requests';
 import { compact, money, tokensIn, tokensOut } from './format';
-import { deriveMood, useStore, useTick } from './hooks';
-import { IconChart, IconChevron, IconClose, IconEye, IconHistory, IconPlug, IconPlus, IconWarn } from './icons';
+import { deriveMood, moodDeadline, useStore, useTick } from './hooks';
+import { IconChart, IconChevron, IconClose, IconEye, IconHistory, IconPlug, IconPlus, IconRefresh, IconWarn } from './icons';
 import { send } from './store';
 
 const SUGGESTIONS = [
@@ -23,16 +23,21 @@ export function App() {
   const [toast, setToast] = useState<typeof s.notice>();
   const [dragging, setDragging] = useState(false);
   const busy = s.activity !== 'idle';
-  // Moods such as "speaking" and "done" depend on elapsed time, so re-evaluate while they can change.
+  // Moods such as "speaking" depend on elapsed time, so re-evaluate while they can change.
   useTick(busy || s.loading, 300);
   const [, settle] = useState(0);
-  const { mood, caption } = deriveMood(s);
+  const [poke, setPoke] = useState(0);
+  const { mood, caption, work } = deriveMood(s);
+  // Timed moods (celebrating, listening, dozing off) end on their own: re-render exactly then.
   useEffect(() => {
-    if (mood === 'happy' || mood === 'error') {
-      const id = setTimeout(() => settle((n) => n + 1), mood === 'happy' ? 1700 : 4100);
-      return () => clearTimeout(id);
-    }
-  }, [mood, s.notice?.nonce, s.activity]);
+    const wait = moodDeadline() ?? (mood === 'idle' ? 60_000 : undefined);
+    if (wait === undefined) return;
+    const id = setTimeout(() => settle((n) => n + 1), wait + 30);
+    return () => clearTimeout(id);
+  });
+  useEffect(() => {
+    document.documentElement.style.setProperty('--oh-zoom', String(s.zoom || 1));
+  }, [s.zoom]);
 
   useEffect(() => {
     if (s.panel.nonce) setPanel(s.panel.name);
@@ -115,8 +120,11 @@ export function App() {
       <div class="body">
         {s.avatar.enabled && (
           <div class="stage" data-mood={mood}>
-            <button type="button" class="stage-oki" title="Click to switch between the robot and the orb" aria-label="Switch companion style" onClick={() => send({ type: 'setAvatar', style: s.avatar.style === 'bot' ? 'orb' : 'bot' })}>
-              <Avatar mood={mood} style={s.avatar.style} />
+            <button type="button" class="stage-oki" title="Say hi" aria-label="Poke the companion" onClick={() => setPoke((n) => n + 1)}>
+              <Avatar mood={mood} work={work} style={s.avatar.style} poke={poke} />
+            </button>
+            <button type="button" class="icon-btn stage-swap" title={s.avatar.style === 'buddy' ? 'Switch to dots' : 'Switch to Oki'} aria-label="Switch companion style" onClick={() => send({ type: 'setAvatar', style: s.avatar.style === 'buddy' ? 'dots' : 'buddy' })}>
+              <IconRefresh size={12} />
             </button>
             <div class="stage-text">
               <div class="stage-caption" aria-live="polite">

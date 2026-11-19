@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<title>Oki mood gallery</title>
+<link rel="icon" href="data:," />
+<style>
+  body { margin: 0; padding: 18px; background: #181818; color: #cfcfcf; font: 13px -apple-system, "Segoe UI", system-ui, "DejaVu Sans", sans-serif; }
+  body.light { background: #f8f8f8; color: #3b3b3b; }
+  .grid { display: grid; grid-template-columns: repeat(5, 170px); gap: 10px 14px; }
+  figure { margin: 0; text-align: center; }
+  canvas { width: 170px; height: 170px; display: block; }
+  figcaption { margin-top: -2px; }
+</style>
+</head>
+<body>
+<div class="grid" id="grid"></div>
+<script src="/dist/avatar.js"></script>
+<script>
+  // Every mood side by side; used by the UI tests and to make the README picture.
+  const q = new URLSearchParams(location.search);
+  if (q.get('theme') === 'light') document.body.classList.add('light');
+  const style = q.get('style') || 'buddy';
+  const cells = [
+    ['idle'], ['listening'], ['thinking'], ['speaking'], ['waiting'],
+    ['working', 'build', 'working: run'], ['working', 'edit', 'working: edit'], ['working', 'search', 'working: look up'], ['happy'], ['excited'],
+    ['sad'], ['sleepy'],
+  ];
+  window.__handles = [];
+  for (const [mood, work, label] of cells) {
+    const fig = document.createElement('figure');
+    const canvas = document.createElement('canvas');
+    const cap = document.createElement('figcaption');
+    cap.textContent = label || mood;
+    fig.append(canvas, cap);
+    document.getElementById('grid').append(fig);
+    const h = window.OkiAvatar.mount(canvas, { style, mood: 'idle', light: document.body.classList.contains('light') });
+    if (work) h.setWork(work);
+    h.setMood(mood);
+    if (mood === 'speaking') setInterval(() => h.pulse(), 120);
+    // Keep the timed celebrations going so a screenshot always catches them.
+    if (mood === 'happy' || mood === 'excited') setInterval(() => { h.setMood('idle'); h.setMood(mood); }, mood === 'excited' ? 2400 : 1250);
+    window.__handles.push(h);
+  }
+</script>
+</body>
+</html>

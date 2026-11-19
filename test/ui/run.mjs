@@ -171,15 +171,50 @@ await test('streaming: deltas append text and the companion follows along', asyn
   // A running tool switches the companion to its working mood.
   await t.host({ type: 'event', event: { type: 'part.updated', sessionId: sid, messageId: 'm4', part: { id: 'tool1', type: 'tool', tool: 'bash', callId: 'c9', status: 'running', title: 'npm test' } } });
   await t.page.waitForFunction(() => document.querySelector('.stage-caption')?.textContent === 'Running bash…');
-  assert.equal(await t.page.$eval('canvas.oki', (c) => c.dataset.mood), 'tool');
+  assert.equal(await t.page.$eval('canvas.oki', (c) => c.dataset.mood), 'working');
+  assert.equal(await t.page.$eval('canvas.oki', (c) => c.dataset.work), 'build');
   // Stop button and Esc both abort.
   await t.clearPosted();
   await t.page.click('.send.stop');
   assert.equal((await t.posted('abort')).length, 1);
-  // Finishing the turn: happy for a moment, then back to idle.
+  // The tool finishes: a little cheer straight away, and real excitement when the turn ends well.
+  await t.host({ type: 'event', event: { type: 'part.updated', sessionId: sid, messageId: 'm4', part: { id: 'tool1', type: 'tool', tool: 'bash', callId: 'c9', status: 'completed', title: 'npm test', output: '12 passed' } } });
+  await t.page.waitForFunction(() => document.querySelector('canvas.oki')?.dataset.reaction === 'success');
   await t.host({ type: 'patch', patch: { activity: 'idle' } });
-  await t.page.waitForFunction(() => document.querySelector('.stage-caption')?.textContent === 'Done');
-  await t.page.waitForFunction(() => document.querySelector('.stage-caption')?.textContent === 'Ready', { timeout: 5000 });
+  await t.page.waitForFunction(() => document.querySelector('.stage-caption')?.textContent === 'It worked!');
+  assert.equal(await t.page.$eval('canvas.oki', (c) => c.dataset.mood), 'excited');
+  await sleep(450);
+  await t.shot('03b-excited-dark');
+  await t.page.waitForFunction(() => document.querySelector('.stage-caption')?.textContent === 'Ready', { timeout: 6000 });
+  assert.equal(await t.page.$eval('canvas.oki', (c) => c.dataset.mood), 'idle');
+
+  // Next turn: a lookup, then an edit that fails. Oki picks the matching prop, winces, and ends up sad.
+  await t.host({ type: 'patch', patch: { activity: 'busy' } });
+  await t.host({ type: 'event', event: { type: 'message.updated', message: { id: 'm5', sessionId: sid, role: 'assistant', createdAt: Date.now() + 5, parts: [{ id: 'tl', type: 'tool', tool: 'grep', callId: 'c10', status: 'running' }] } } });
+  await t.page.waitForFunction(() => document.querySelector('canvas.oki')?.dataset.work === 'search');
+  assert.equal(await t.text('.stage-caption'), 'Looking with grep…');
+  await t.host({ type: 'event', event: { type: 'part.updated', sessionId: sid, messageId: 'm5', part: { id: 'te', type: 'tool', tool: 'edit', callId: 'c11', status: 'running' } } });
+  await t.page.waitForFunction(() => document.querySelector('canvas.oki')?.dataset.work === 'edit');
+  await t.host({ type: 'event', event: { type: 'part.updated', sessionId: sid, messageId: 'm5', part: { id: 'te', type: 'tool', tool: 'edit', callId: 'c11', status: 'error', error: 'old_string not found' } } });
+  await t.page.waitForFunction(() => document.querySelector('canvas.oki')?.dataset.reaction === 'fail');
+  await t.host({ type: 'patch', patch: { activity: 'idle' } });
+  await t.page.waitForFunction(() => document.querySelector('.stage-caption')?.textContent === 'That did not work');
+  assert.equal(await t.page.$eval('canvas.oki', (c) => c.dataset.mood), 'sad');
+  await sleep(500);
+  await t.shot('03c-sad-dark');
+
+  // A turn split over two messages, the way opencode sends it: a tool that is already finished
+  // when it first shows up, then the answer in a second message. Still counts as a success.
+  await t.host({ type: 'patch', patch: { activity: 'busy' } });
+  await t.host({ type: 'event', event: { type: 'message.updated', message: { id: 'm6', sessionId: sid, role: 'user', createdAt: Date.now() + 6, parts: [{ id: 'u6', type: 'text', text: 'Try again' }] } } });
+  await t.page.waitForFunction(() => document.querySelector('.stage-caption')?.textContent === 'Thinking…');
+  await t.host({ type: 'events', events: [
+    { type: 'message.updated', message: { id: 'm7', sessionId: sid, role: 'assistant', createdAt: Date.now() + 7, completedAt: Date.now() + 8, parts: [{ id: 't7', type: 'tool', tool: 'mockmcp_add', callId: 'c12', status: 'completed', output: '42' }] } },
+    { type: 'message.updated', message: { id: 'm8', sessionId: sid, role: 'assistant', createdAt: Date.now() + 9, completedAt: Date.now() + 10, parts: [{ id: 't8', type: 'text', text: 'The answer is 42.' }] } },
+  ] });
+  await t.host({ type: 'patch', patch: { activity: 'idle' } });
+  await t.page.waitForFunction(() => document.querySelector('.stage-caption')?.textContent === 'It worked!');
+  assert.equal(await t.page.$eval('canvas.oki', (c) => c.dataset.mood), 'excited');
   assert.deepEqual(t.consoleErrors, []);
   await t.page.close();
 });
@@ -434,24 +469,142 @@ await test('engine, model and agent pickers', async () => {
   await t.page.close();
 });
 
-await test('companion: orb style, hide and show, and the plain status line without it', async () => {
+await test('companion: dots style, poke, listening, hide and show', async () => {
   const t = await open();
-  await t.host({ type: 'state', state: { ...base, avatar: { enabled: true, style: 'orb' } } });
-  await t.page.waitForFunction(() => document.querySelector('canvas.oki')?.dataset.style === 'orb', { timeout: 15000 });
+  await t.host({ type: 'state', state: { ...base, avatar: { enabled: true, style: 'dots' } } });
+  await t.page.waitForFunction(() => document.querySelector('canvas.oki')?.dataset.style === 'dots', { timeout: 15000 });
   await sleep(600);
-  await t.shot('12-orb-dark');
+  await t.shot('12-dots-dark');
+  await t.clearPosted();
+  // The swap button changes the style; the host confirms it.
+  await t.page.hover('.stage');
+  await t.page.click('.stage-swap');
+  assert.deepEqual(await t.posted('setAvatar'), [{ type: 'setAvatar', style: 'buddy' }]);
+  await t.host({ type: 'patch', patch: { avatar: { enabled: true, style: 'buddy' } } });
+  await t.page.waitForFunction(() => document.querySelector('canvas.oki')?.dataset.style === 'buddy');
+  // Clicking Oki is just for fun: it reacts, nothing is sent anywhere.
   await t.clearPosted();
   await t.page.click('.stage-oki');
-  assert.deepEqual(await t.posted('setAvatar'), [{ type: 'setAvatar', style: 'bot' }]);
+  await t.page.waitForFunction(() => document.querySelector('canvas.oki')?.dataset.reaction === 'poke');
+  assert.deepEqual(await t.posted(), []);
+  // Typing makes it pay attention, and it relaxes again afterwards.
+  await t.page.focus('textarea');
+  await t.page.keyboard.type('hel');
+  await t.page.waitForFunction(() => document.querySelector('canvas.oki')?.dataset.mood === 'listening');
+  await t.page.waitForFunction(() => document.querySelector('canvas.oki')?.dataset.mood === 'idle', { timeout: 5000 });
+  // The animation keeps running in every mood without errors.
+  const f1 = await t.page.$eval('canvas.oki', (c) => Number(c.dataset.frames));
+  await sleep(500);
+  assert.ok((await t.page.$eval('canvas.oki', (c) => Number(c.dataset.frames))) > f1);
+
   await t.page.click('button[aria-label="Hide companion"]');
-  assert.deepEqual((await t.posted('setAvatar'))[1], { type: 'setAvatar', enabled: false });
-  await t.host({ type: 'patch', patch: { avatar: { enabled: false, style: 'bot' } } });
+  assert.deepEqual((await t.posted('setAvatar')).pop(), { type: 'setAvatar', enabled: false });
+  await t.host({ type: 'patch', patch: { avatar: { enabled: false, style: 'buddy' } } });
   await t.page.waitForFunction(() => !document.querySelector('canvas.oki'));
   assert.equal(await t.text('.welcome h1'), 'What are we building?');
-  await t.host({ type: 'patch', patch: { ...conversation, avatar: { enabled: false, style: 'bot' }, activity: 'busy' } });
+  await t.host({ type: 'patch', patch: { ...conversation, avatar: { enabled: false, style: 'buddy' }, activity: 'busy' } });
   await t.page.waitForSelector('.status-line');
   assert.match(await t.text('.status-line'), /Thinking…/);
   await t.shot('13-no-avatar-dark');
+  assert.deepEqual(t.consoleErrors, []);
+  await t.page.close();
+});
+
+await test('companion gallery: every mood renders and animates in both styles', async () => {
+  for (const [style, name] of [['buddy', '18-moods-buddy'], ['dots', '19-moods-dots']]) {
+    const page = await browser.newPage();
+    await page.setViewport({ width: 950, height: 620, deviceScaleFactor: 2 });
+    const errors = [];
+    page.on('pageerror', (e) => errors.push(String(e)));
+    page.on('console', (m) => m.type() === 'error' && errors.push(m.text()));
+    await page.goto(`${origin}/test/ui/gallery.html?style=${style}`);
+    await page.waitForFunction(() => document.querySelectorAll('canvas[data-renderer="webgl"]').length === 12, { timeout: 20000 });
+    await sleep(1500);
+    const cells = await page.$$eval('canvas', (els) => els.map((c) => ({ mood: c.dataset.mood, frames: Number(c.dataset.frames || 0) })));
+    assert.deepEqual([...new Set(cells.map((c) => c.mood))].sort(), ['excited', 'happy', 'idle', 'listening', 'sad', 'sleepy', 'speaking', 'thinking', 'waiting', 'working']);
+    assert.ok(cells.every((c) => c.frames > 5), `every canvas animates: ${JSON.stringify(cells)}`);
+    await page.screenshot({ path: path.join(outDir, `${name}.png`) });
+    assert.deepEqual(errors, []);
+    await page.close();
+  }
+});
+
+await test('layout: text zoom, a wide editor tab, and moving the chat', async () => {
+  const t = await open('dark', 1200, 800);
+  await t.host({ type: 'state', state: { ...conversation, zoom: 1 } });
+  await t.page.waitForSelector('.msg.assistant .md');
+  const size = () => t.page.$eval('.msg.assistant .md p', (el) => parseFloat(getComputedStyle(el).fontSize));
+  const codeSize = () => t.page.$eval('.code pre', (el) => parseFloat(getComputedStyle(el).fontSize));
+  assert.equal(await size(), 13);
+  assert.equal(await codeSize(), 12);
+  await t.host({ type: 'patch', patch: { zoom: 1.4 } });
+  await t.page.waitForFunction(() => getComputedStyle(document.documentElement).getPropertyValue('--oh-zoom').trim() === '1.4');
+  assert.ok(Math.abs((await size()) - 18.2) < 0.1, `text scales with zoom (${await size()}px)`);
+  assert.ok(Math.abs((await codeSize()) - 16.8) < 0.1, `code scales with zoom (${await codeSize()}px)`);
+  await t.host({ type: 'patch', patch: { zoom: 1 } });
+  // In a wide tab the conversation stays a readable, centred column instead of stretching edge to edge.
+  const box = await t.page.$eval('.msg.assistant', (el) => {
+    const r = el.getBoundingClientRect();
+    return { left: r.left, right: window.innerWidth - r.right, width: r.width };
+  });
+  assert.ok(box.width <= 880.5, `column width is capped (${box.width}px)`);
+  // The scrollbar gutter sits on the right, so allow for its width.
+  assert.ok(Math.abs(box.left - box.right) < 20, `column is centred (${box.left} vs ${box.right})`);
+  const input = await t.page.$eval('.input-box', (el) => el.getBoundingClientRect().width);
+  assert.ok(input <= 880.5);
+  await t.shot('20-wide-editor-tab');
+  // /move and /zoom are ordinary commands: they complete with an argument hint and go to the host.
+  await t.page.focus('textarea');
+  await t.page.keyboard.type('/mov');
+  await t.page.waitForSelector('.popup .popup-item');
+  await t.page.keyboard.press('Tab');
+  assert.equal(await t.page.$eval('textarea', (el) => el.value), '/move ');
+  await t.page.keyboard.type('right');
+  await t.clearPosted();
+  await t.page.keyboard.press('Enter');
+  assert.deepEqual(await t.posted('send'), [{ type: 'send', text: '/move right' }]);
+  assert.deepEqual(t.consoleErrors, []);
+  await t.page.close();
+});
+
+await test('performance: a long streamed reply stays smooth', async () => {
+  const t = await open('dark', 420, 800);
+  const para = 'The **quick** brown fox jumps over the lazy dog and keeps running through `code` and [links](https://example.com) until the paragraph ends.\n\n';
+  const code = '```ts\nexport function add(a: number, b: number) {\n  return a + b;\n}\n```\n\n';
+  let doc = '';
+  for (let i = 0; i < 60; i++) doc += `### Section ${i + 1}\n\n` + para + (i % 3 === 0 ? code : '- one\n- two\n- three\n\n');
+  doc += 'ENDMARK\n';
+  await t.host({ type: 'state', state: { ...conversation, avatar: { enabled: false, style: 'buddy' }, activity: 'busy', messages: [...conversation.messages, { id: 'big', sessionId: 'ses_1', role: 'assistant', createdAt: Date.now(), parts: [{ id: 'bp', type: 'text', text: '' }] }] } });
+  await t.page.waitForSelector('[data-message-id="big"]');
+  const r = await t.page.evaluate(async (text) => {
+    let longest = 0;
+    new PerformanceObserver((l) => l.getEntries().forEach((e) => (longest = Math.max(longest, e.duration)))).observe({ entryTypes: ['longtask'] });
+    const start = performance.now();
+    let first;
+    // The host sends streamed tokens in small batches, about one per frame.
+    const size = 12;
+    for (let i = 0, n = 0; i < text.length; n++) {
+      const events = [];
+      for (let k = 0; k < 4 && i < text.length; k++, i += size) events.push({ type: 'part.delta', sessionId: 'ses_1', messageId: 'big', partId: 'bp', delta: text.slice(i, i + size) });
+      window.__host({ type: 'events', events });
+      await new Promise((res) => setTimeout(res, 0));
+      // Remember the first rendered block: it must survive every later chunk untouched.
+      if (!first && n > 30) first = document.querySelector('[data-message-id="big"] .mdb');
+    }
+    while (!document.querySelector('[data-message-id="big"] .md')?.textContent.includes('ENDMARK')) await new Promise((res) => setTimeout(res, 10));
+    const total = performance.now() - start;
+    await new Promise((res) => setTimeout(res, 150));
+    return { total, longest, blocks: document.querySelectorAll('[data-message-id="big"] .mdb').length, firstKept: !!first && first.isConnected && first === document.querySelector('[data-message-id="big"] .mdb'), chunks: Math.ceil(text.length / size) };
+  }, doc);
+  console.log(`      streamed ${r.chunks} chunks into ${r.blocks} blocks in ${Math.round(r.total)} ms, longest task ${Math.round(r.longest)} ms`);
+  assert.ok(r.firstKept, 'earlier blocks keep their DOM nodes while later text streams in');
+  assert.ok(r.blocks >= 150, `rendered block by block (${r.blocks})`);
+  // Generous limits so slow CI machines pass; a regression to whole-message re-rendering takes several times longer.
+  assert.ok(r.total < 5000, `finished in ${Math.round(r.total)} ms`);
+  assert.ok(r.longest < 400, `no long main-thread stalls (${Math.round(r.longest)} ms)`);
+  // The view sticks to the bottom while streaming.
+  const gap = await t.page.$eval('.messages', (el) => el.scrollHeight - el.scrollTop - el.clientHeight);
+  assert.ok(gap < 60, `stays scrolled to the newest text (${gap}px from the bottom)`);
   assert.deepEqual(t.consoleErrors, []);
   await t.page.close();
 });
@@ -463,6 +616,7 @@ await test('engine not available, untrusted workspace and toasts', async () => {
   await t.page.waitForSelector('.callout');
   assert.match(await t.text('.callout'), /Codex \(ChatGPT\) is not available.*Codex CLI not found\./s);
   await t.page.waitForFunction(() => document.querySelector('.stage-caption')?.textContent === 'Engine not available');
+  await t.page.waitForFunction(() => document.querySelector('canvas.oki')?.dataset.mood === 'sad');
   await sleep(500);
   await t.shot('14-engine-unavailable-dark');
   await t.page.click('.callout .btn.primary');

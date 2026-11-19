@@ -7,6 +7,7 @@ export const commands = [
   ['engine', 'Switch engine (opencode, BYOK, Claude Code, Codex, Copilot)', '[name]'], ['mcp', 'Show MCP servers and toggle them'], ['usage', 'Show token usage for this session and overall'],
   ['attach', 'Attach files to the next message'], ['compact', 'Summarize the conversation to free up context'], ['undo', 'Revert the last message and its file changes'],
   ['share', 'Create a share link for this session'], ['help', 'List available commands'],
+  ['move', 'Dock the chat left, right, or open it as an editor tab', '[left|right|editor]'], ['zoom', 'Make the chat text larger or smaller', '[in|out|reset|120%]'],
 ].map(([name, description, argumentHint]) => ({ name, description, source: 'builtin', argumentHint }))
   .concat([{ name: 'review', description: 'review changes [commit|branch|pr], defaults to uncommitted', source: 'engine', argumentHint: '[arguments]' }, { name: 'greet', description: 'Greet someone', source: 'engine', argumentHint: '[arguments]' }]);
 
@@ -49,7 +50,8 @@ export const base = {
   questions: [],
   sessionUsage: undefined,
   usage: undefined,
-  avatar: { enabled: true, style: 'bot' },
+  avatar: { enabled: true, style: 'buddy' },
+  zoom: 1,
   trusted: true,
   panel: { name: 'none', nonce: 0 },
   notice: undefined,

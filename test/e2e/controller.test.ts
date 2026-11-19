@@ -105,7 +105,7 @@ describe.skipIf(!bin)('ChatController with the real opencode engine', () => {
     expect(v.sessionId).toMatch(/^ses/);
     expect(v.messages.map((m) => m.role)).toEqual(['user', 'assistant']);
     expect(texts(v.messages[1].parts)).toEqual(['MOCK[mock-small]: hello from the controller']);
-    expect(host.posted.some((m) => m.type === 'event' && m.event.type === 'part.delta')).toBe(true);
+    expect(host.posted.some((m) => (m.type === 'event' && m.event.type === 'part.delta') || (m.type === 'events' && m.events.some((e) => e.type === 'part.delta')))).toBe(true);
 
     const withUsage = await host.until((s) => !!s.sessionUsage && s.sessionUsage.usage.input > 0, 10_000, 'session usage');
     expect(withUsage.sessionUsage).toMatchObject({ engine: 'opencode', messages: 1, usage: { input: 100, output: 30, cacheRead: 20 } });
@@ -253,14 +253,50 @@ describe.skipIf(!bin)('ChatController with the real opencode engine', () => {
   });
 
   it('/avatar toggles the companion and writes the setting', async () => {
-    expect(host.view!.avatar).toEqual({ enabled: true, style: 'bot' });
+    expect(host.view!.avatar).toEqual({ enabled: true, style: 'buddy' });
     await controller.handleMessage({ type: 'send', text: '/avatar off' });
     expect(host.view!.avatar.enabled).toBe(false);
     expect(ctx.settings['avatar.enabled']).toBe(false);
-    await controller.handleMessage({ type: 'send', text: '/avatar orb' });
-    expect(host.view!.avatar).toEqual({ enabled: true, style: 'orb' });
-    await controller.handleMessage({ type: 'setAvatar', style: 'bot' });
-    expect(ctx.settings['avatar.style']).toBe('bot');
+    await controller.handleMessage({ type: 'send', text: '/avatar dots' });
+    expect(host.view!.avatar).toEqual({ enabled: true, style: 'dots' });
+    await controller.handleMessage({ type: 'setAvatar', style: 'buddy' });
+    expect(ctx.settings['avatar.style']).toBe('buddy');
+  });
+
+  it('/zoom scales the chat text within limits and /move docks the chat', async () => {
+    expect(host.view!.zoom).toBe(1);
+    await controller.handleMessage({ type: 'send', text: '/zoom in' });
+    await controller.handleMessage({ type: 'zoom', delta: 0.1 });
+    expect(host.view!.zoom).toBe(1.2);
+    expect(ctx.settings['chat.zoom']).toBe(1.2);
+    await controller.handleMessage({ type: 'send', text: '/zoom 150%' });
+    expect(host.view!.zoom).toBe(1.5);
+    await controller.handleMessage({ type: 'send', text: '/zoom 9' });
+    expect(host.view!.zoom).toBe(1.6);
+    await controller.handleMessage({ type: 'send', text: '/zoom out' });
+    expect(host.view!.zoom).toBe(1.5);
+    await controller.handleMessage({ type: 'send', text: '/zoom reset' });
+    expect(host.view!.zoom).toBe(1);
+
+    await controller.handleMessage({ type: 'send', text: '/move right' });
+    await controller.handleMessage({ type: 'moveView', to: 'editor' });
+    host.pickByLabel(/Left side bar/);
+    await controller.handleMessage({ type: 'send', text: '/move' });
+    expect(host.moved).toEqual(['right', 'editor', 'left']);
+  });
+
+  it('batches streamed tokens instead of posting one message per token', async () => {
+    await controller.handleMessage({ type: 'newSession' });
+    const before = host.posted.length;
+    await controller.handleMessage({ type: 'send', text: 'a reasonably long message so that the reply streams back in many small chunks of text' });
+    const v = await host.until((s) => s.activity === 'idle' && s.messages.some((m) => m.role === 'assistant' && !!m.completedAt));
+    const sent = host.posted.slice(before);
+    const batches = sent.filter((m) => m.type === 'events');
+    const streamed = sent.reduce((n, m) => n + (m.type === 'events' ? m.events.length : m.type === 'event' ? 1 : 0), 0);
+    expect(batches.length).toBeGreaterThan(0);
+    expect(streamed).toBeGreaterThan(sent.filter((m) => m.type === 'events' || m.type === 'event').length);
+    // Nothing is lost or reordered by batching.
+    expect(texts(v.messages[1].parts)).toEqual(['MOCK[mock-small]: a reasonably long message so that the reply streams back in many small chunks of text']);
   });
 
   it('switches to the Direct BYOK engine and back, keeping separate sessions and combined usage', async () => {

@@ -53,7 +53,8 @@ export async function run(): Promise<void> {
       const cfg = vscode.workspace.getConfiguration('opencodeHub');
       assert.equal(cfg.get('defaultEngine'), 'opencode');
       assert.equal(cfg.get('avatar.enabled'), true);
-      assert.equal(cfg.get('avatar.style'), 'bot');
+      assert.equal(cfg.get('avatar.style'), 'buddy');
+      assert.equal(cfg.get('chat.zoom'), 1);
       assert.deepEqual(cfg.get('providers'), []);
       assert.deepEqual(cfg.get('mcp.servers'), {});
     });
@@ -161,6 +162,49 @@ export async function run(): Promise<void> {
       assert.equal(vscode.workspace.getConfiguration('opencodeHub').get('avatar.enabled'), false);
       await vscode.commands.executeCommand('opencodeHub.toggleAvatar');
       await until('avatar on', () => state().avatar.enabled === true, 10_000);
+    });
+
+    it('scales the chat text with the zoom commands', async () => {
+      await vscode.commands.executeCommand('opencodeHub.zoomReset');
+      await vscode.commands.executeCommand('opencodeHub.zoomIn');
+      await vscode.commands.executeCommand('opencodeHub.zoomIn');
+      await until('zoom 1.2', () => state().zoom === 1.2, 10_000);
+      assert.equal(vscode.workspace.getConfiguration('opencodeHub').get('chat.zoom'), 1.2);
+      await vscode.commands.executeCommand('opencodeHub.zoomOut');
+      await until('zoom 1.1', () => state().zoom === 1.1, 10_000);
+      await vscode.commands.executeCommand('opencodeHub.zoomReset');
+      await until('zoom 1', () => state().zoom === 1, 10_000);
+    });
+
+    it('opens the chat as an editor tab next to the side bar view', async () => {
+      const before = api.view.surfaceCount;
+      await vscode.commands.executeCommand('opencodeHub.openInEditor');
+      await until('editor tab', () => api.view.hasPanel && api.view.surfaceCount === before + 1, 20_000);
+      // Both places show the same chat; sending still works with two views attached.
+      await api.controller.handleMessage({ type: 'newSession' });
+      await api.controller.handleMessage({ type: 'send', text: 'from the editor tab' });
+      await until('reply', () => state().activity === 'idle' && state().messages.some((m) => m.role === 'assistant' && m.completedAt));
+      api.view.closePanel();
+      await until('tab closed', () => !api.view.hasPanel && api.view.surfaceCount === before, 10_000);
+      assert.equal(api.controller.isWebviewReady, true);
+    });
+
+    it('moves the chat to the right (secondary) side bar and back', async function () {
+      // VS Code registers a command named after every contributed view container.
+      const commands = await vscode.commands.getCommands(true);
+      assert.ok(commands.includes('workbench.view.extension.opencodeHub'));
+      if (!commands.includes('workbench.view.extension.opencodeHubSecondary')) {
+        console.log(`      VS Code ${vscode.version} cannot contribute a secondary side bar container; the command falls back to the interactive "Move View" picker`);
+        return this.skip();
+      }
+      await vscode.commands.executeCommand('opencodeHub.moveToRight');
+      await until('chat usable on the right', () => api.controller.isWebviewReady && api.view.visible, 20_000);
+      await vscode.commands.executeCommand('workbench.action.focusAuxiliaryBar');
+      assert.equal(api.view.visible, true);
+      await api.controller.handleMessage({ type: 'send', text: 'from the right side' });
+      await until('reply', () => state().activity === 'idle' && state().messages.filter((m) => m.role === 'assistant' && m.completedAt).length >= 2);
+      await vscode.commands.executeCommand('opencodeHub.moveToLeft');
+      await until('chat usable on the left', () => api.controller.isWebviewReady && api.view.visible, 20_000);
     });
 
     it('opens the MCP and usage panels from commands', async () => {

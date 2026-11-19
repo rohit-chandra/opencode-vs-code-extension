@@ -1,13 +1,41 @@
+import { Component, h } from 'preact';
+import type { ComponentChildren, FunctionComponent } from 'preact';
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'preact/hooks';
 import type { ChatMessage, Part } from '../../../src/shared/types';
 import { compact, money, tokensIn, tokensOut } from '../format';
 import { IconBrain, IconCheck, IconChevron, IconClose, IconFile, IconImage, IconTool, IconWarn } from '../icons';
-import { renderMarkdown } from '../markdown';
+import { renderBlocks } from '../markdown';
 import { send } from '../store';
 
+/** Skip re-rendering a component whose props are shallowly equal (a tiny `memo`, without preact/compat). */
+function memo<P extends object>(render: FunctionComponent<P>): FunctionComponent<P> {
+  class Memo extends Component<P> {
+    override shouldComponentUpdate(next: P): boolean {
+      const prev = this.props as Record<string, unknown>;
+      for (const k in next) if ((next as Record<string, unknown>)[k] !== prev[k]) return true;
+      return false;
+    }
+    render(): ComponentChildren {
+      return h(render as FunctionComponent<object>, this.props);
+    }
+  }
+  return Memo as unknown as FunctionComponent<P>;
+}
+
+const MdBlock = memo(function MdBlock({ html }: { html: string }) {
+  return <div class="mdb" dangerouslySetInnerHTML={{ __html: html }} />;
+});
+
+/** Markdown rendered block by block, so a streaming reply only touches the DOM of its last block. */
 function Markdown({ text }: { text: string }) {
-  const html = useMemo(() => renderMarkdown(text), [text]);
-  return <div class="md" dangerouslySetInnerHTML={{ __html: html }} />;
+  const blocks = useMemo(() => renderBlocks(text), [text]);
+  return (
+    <div class="md">
+      {blocks.map((b, i) => (
+        <MdBlock key={i} html={b.html} />
+      ))}
+    </div>
+  );
 }
 
 function Reasoning({ part, live }: { part: Extract<Part, { type: 'reasoning' }>; live: boolean }) {
@@ -111,7 +139,7 @@ function PartView({ part, live }: { part: Part; live: boolean }) {
   }
 }
 
-function Message({ message, live }: { message: ChatMessage; live: boolean }) {
+const Message = memo(function Message({ message, live }: { message: ChatMessage; live: boolean }) {
   if (message.role === 'user') {
     const files = message.parts.filter((p) => p.type === 'file');
     const text = message.parts
@@ -155,7 +183,7 @@ function Message({ message, live }: { message: ChatMessage; live: boolean }) {
       )}
     </div>
   );
-}
+});
 
 export function MessageList({ messages, busy }: { messages: ChatMessage[]; busy: boolean }) {
   const scroller = useRef<HTMLDivElement>(null);

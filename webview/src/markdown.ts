@@ -74,25 +74,66 @@ DOMPurify.addHook('afterSanitizeAttributes', (node) => {
   }
 });
 
-const cache = new Map<string, string>();
+const SANITIZE = {
+  ADD_ATTR: ['data-action', 'data-href'],
+  FORBID_TAGS: ['style', 'form', 'input', 'iframe', 'object', 'embed', 'video', 'audio', 'link', 'meta', 'base'],
+  FORBID_ATTR: ['style', 'onerror', 'onclick'],
+};
 
-/** Render model output (untrusted) to sanitized HTML. */
-export function renderMarkdown(text: string): string {
-  const hit = cache.get(text);
-  if (hit !== undefined) return hit;
-  let html: string;
-  try {
-    html = DOMPurify.sanitize(marked.parse(closeOpenFence(text), { async: false }) as string, {
-      ADD_ATTR: ['data-action', 'data-href'],
-      FORBID_TAGS: ['style', 'form', 'input', 'iframe', 'object', 'embed', 'video', 'audio', 'link', 'meta', 'base'],
-      FORBID_ATTR: ['style', 'onerror', 'onclick'],
-    });
-  } catch {
-    html = `<p>${escapeHtml(text)}</p>`;
-  }
-  if (cache.size > 400) cache.clear();
-  if (text.length < 20_000) cache.set(text, html);
+const cache = new Map<string, string>();
+const remember = (key: string, html: string): string => {
+  if (cache.size > 1500) cache.clear();
+  if (key.length < 20_000) cache.set(key, html);
   return html;
+};
+
+export interface MarkdownBlock {
+  /** Source text of this top-level block; identical text means identical HTML. */
+  raw: string;
+  html: string;
+}
+
+/**
+ * Render model output (untrusted) to sanitized HTML, one entry per top-level block
+ * (paragraph, list, code fence, table…).
+ *
+ * Splitting matters while a reply streams in: only the last block changes, so only its
+ * DOM is replaced. Everything above it keeps its nodes, its scroll position and its text
+ * selection, and a long answer costs the same per chunk as a short one.
+ */
+export function renderBlocks(text: string): MarkdownBlock[] {
+  let tokens: ReturnType<typeof marked.lexer>;
+  try {
+    tokens = marked.lexer(closeOpenFence(text));
+  } catch {
+    return [{ raw: text, html: `<p>${escapeHtml(text)}</p>` }];
+  }
+  const blocks: MarkdownBlock[] = [];
+  for (const token of tokens) {
+    if (token.type === 'space') continue;
+    // Reference-style link definitions live on the token list, so they are part of the cache key.
+    const refs = Object.keys(tokens.links).length ? JSON.stringify(tokens.links) : '';
+    const key = refs + token.raw;
+    let html = cache.get(key);
+    if (html === undefined) {
+      try {
+        const one = Object.assign([token], { links: tokens.links });
+        html = DOMPurify.sanitize(marked.parser(one), SANITIZE);
+      } catch {
+        html = `<p>${escapeHtml(token.raw)}</p>`;
+      }
+      remember(key, html);
+    }
+    if (html) blocks.push({ raw: token.raw, html });
+  }
+  return blocks;
+}
+
+/** Render a whole document at once. */
+export function renderMarkdown(text: string): string {
+  return renderBlocks(text)
+    .map((b) => b.html)
+    .join('');
 }
 
 /** While a reply is streaming, a code fence may still be open; close it so the layout does not jump. */

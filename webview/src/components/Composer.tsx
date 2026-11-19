@@ -216,6 +216,7 @@ export function Composer({ s, onOpenPanel }: { s: ViewState; onOpenPanel: (p: 'm
           aria-label="Message"
           onInput={(e) => {
             const el = e.currentTarget;
+            store.typing();
             setText(el.value);
             refreshPopup(el.value, el.selectionStart ?? el.value.length);
           }}

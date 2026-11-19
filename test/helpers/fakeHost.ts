@@ -45,7 +45,11 @@ export class FakeHost implements ControllerHost {
     this.posted.push(message);
     if (message.type === 'state') this.view = message.state;
     else if (message.type === 'patch' && this.view) this.view = { ...this.view, ...message.patch };
-    else if (message.type === 'event' && this.view?.sessionId) this.view = { ...this.view, messages: applyMessageEvent(this.view.messages, message.event, this.view.sessionId) };
+    else if ((message.type === 'event' || message.type === 'events') && this.view?.sessionId) {
+      let messages = this.view.messages;
+      for (const event of message.type === 'event' ? [message.event] : message.events) messages = applyMessageEvent(messages, event, this.view.sessionId);
+      this.view = { ...this.view, messages };
+    }
   }
 
   info(m: string): void {
@@ -88,6 +92,10 @@ export class FakeHost implements ControllerHost {
     this.terminals.push({ name, command });
   }
   async focusView(): Promise<void> {}
+  moved: string[] = [];
+  async moveView(to: 'left' | 'right' | 'editor'): Promise<void> {
+    this.moved.push(to);
+  }
 
   /** Wait until the mirrored view satisfies a predicate. */
   async until(pred: (v: ViewState) => boolean, timeoutMs = 60_000, what = 'condition'): Promise<ViewState> {

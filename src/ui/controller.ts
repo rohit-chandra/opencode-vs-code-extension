@@ -10,7 +10,7 @@ import { BUILTIN_COMMANDS, helpMarkdown, isBuiltin, mergeCommands, parseSlash } 
 import type { KeyValueStore, UsageLedger } from '../core/usageLedger';
 import { PROVIDER_PRESETS, presetById, resolveProvider, secretKeyFor } from '../engines/direct/presets';
 import type { ProviderConfig } from '../engines/direct/presets';
-import type { HostToWebview, ViewState, WebviewToHost } from '../shared/protocol';
+import type { AvatarStyle, HostToWebview, ViewState, WebviewToHost } from '../shared/protocol';
 import { applyMessageEvent, messageText } from '../shared/reducer';
 import { ENGINE_LABELS } from '../shared/types';
 import type { Attachment, ChatMessage, EngineEvent, EngineId, ModelRef, SessionInfo } from '../shared/types';
@@ -48,6 +48,8 @@ export interface ControllerHost {
   openSettings(query: string): Promise<void>;
   runInTerminal(name: string, command: string): void;
   focusView(): Promise<void>;
+  /** Dock the chat in the left side bar, the right (secondary) side bar, or open it as an editor tab. */
+  moveView(to: 'left' | 'right' | 'editor'): Promise<void>;
 }
 
 const EMPTY_CAPS = { agents: false, fork: false, share: false, undo: false, compact: false, images: false, mcpToggle: false, permissions: false, providerAuth: false, remoteSessions: false };
@@ -90,7 +92,8 @@ export class ChatController {
       questions: [],
       sessionUsage: undefined,
       usage: undefined,
-      avatar: { enabled: host.config<boolean>('avatar.enabled', true), style: host.config<'bot' | 'orb'>('avatar.style', 'bot') },
+      avatar: { enabled: host.config<boolean>('avatar.enabled', true), style: avatarStyle(host.config<string>('avatar.style', 'buddy')) },
+      zoom: clampZoom(host.config<number>('chat.zoom', 1)),
       trusted: host.workspaceTrusted(),
       panel: { name: 'none', nonce: 0 },
       notice: undefined,
@@ -139,6 +142,7 @@ export class ChatController {
   dispose(): void {
     for (const s of this.subscriptions) s.dispose();
     for (const t of this.timers.values()) clearTimeout(t);
+    if (this.eventTimer) clearTimeout(this.eventTimer);
   }
 
   private debounce(key: string, ms: number, fn: () => void): void {
@@ -155,7 +159,33 @@ export class ChatController {
 
   private set(patch: Partial<ViewState>): void {
     this.state = { ...this.state, ...patch };
-    if (this.webviewReady) this.host.post({ type: 'patch', patch });
+    if (!this.webviewReady) return;
+    this.flushEvents(); // keep ordering: streamed events first, then the patch that follows them
+    this.host.post({ type: 'patch', patch });
+  }
+
+  private pendingEvents: EngineEvent[] = [];
+  private eventTimer: ReturnType<typeof setTimeout> | undefined;
+
+  /**
+   * Streaming events are sent to the webview in small batches (about one per frame). A fast
+   * model emits far more tokens per second than the screen can show, and one postMessage
+   * per token keeps both sides busy for nothing.
+   */
+  private queueEvent(event: EngineEvent): void {
+    this.pendingEvents.push(event);
+    this.eventTimer ??= setTimeout(() => this.flushEvents(), 16);
+  }
+
+  private flushEvents(): void {
+    if (this.eventTimer) {
+      clearTimeout(this.eventTimer);
+      this.eventTimer = undefined;
+    }
+    if (this.pendingEvents.length === 0) return;
+    const events = this.pendingEvents;
+    this.pendingEvents = [];
+    if (this.webviewReady) this.host.post(events.length === 1 ? { type: 'event', event: events[0] } : { type: 'events', events });
   }
 
   private notify(level: 'info' | 'warn' | 'error', text: string): void {
@@ -269,7 +299,7 @@ export class ChatController {
         if (next === this.state.messages) return;
         // Streaming updates go to the webview as events (cheap); it runs the same reducer.
         this.state = { ...this.state, messages: next };
-        if (this.webviewReady) this.host.post({ type: 'event', event });
+        if (this.webviewReady) this.queueEvent(event);
         return;
       }
       case 'permission.asked':
@@ -569,8 +599,22 @@ export class ChatController {
       }
       case 'avatar': {
         const a = args.toLowerCase();
-        if (a === 'bot' || a === 'orb') return this.setAvatar({ enabled: true, style: a });
+        if (a === 'buddy' || a === 'dots' || a === 'bot' || a === 'orb') return this.setAvatar({ enabled: true, style: avatarStyle(a) });
         return this.setAvatar({ enabled: a === 'on' ? true : a === 'off' ? false : !this.state.avatar.enabled });
+      }
+      case 'move': {
+        const a = args.toLowerCase();
+        const to = a === 'left' || a === 'right' || a === 'editor' ? a : await this.host.pick([{ label: 'Right side bar', detail: 'Next to the editor, like other chat views', value: 'right' as const }, { label: 'Left side bar', value: 'left' as const }, { label: 'Editor tab', detail: 'A full-size chat you can split or move to its own window', value: 'editor' as const }], { title: 'OpenCode Hub: Where should the chat live?' });
+        if (to) await this.guard('Could not move the chat', () => this.host.moveView(to));
+        return;
+      }
+      case 'zoom': {
+        const a = args.toLowerCase().replace('%', '');
+        if (a === 'in' || a === '+') return this.zoom(0.1);
+        if (a === 'out' || a === '-') return this.zoom(-0.1);
+        const n = Number(a);
+        // 10 and above is a percentage ("/zoom 125"); smaller numbers are a multiplier ("/zoom 1.25").
+        return this.setZoom(a === '' || a === 'reset' || !Number.isFinite(n) ? 1 : n >= 10 ? n / 100 : n);
       }
       case 'rename': {
         const id = needSession();
@@ -643,7 +687,18 @@ export class ChatController {
     await this.host.saveText(`${session.title.replace(/[^\w.-]+/g, '-').slice(0, 60) || 'session'}.md`, lines.join('\n'));
   }
 
-  async setAvatar(patch: { enabled?: boolean; style?: 'bot' | 'orb' }): Promise<void> {
+  /** Change the chat's text size by a step (0.1 = 10 %). */
+  zoom(delta: number): Promise<void> {
+    return this.setZoom(this.state.zoom + delta);
+  }
+
+  async setZoom(value: number): Promise<void> {
+    const zoom = clampZoom(value);
+    this.set({ zoom });
+    await this.host.updateConfig('chat.zoom', zoom);
+  }
+
+  async setAvatar(patch: { enabled?: boolean; style?: AvatarStyle }): Promise<void> {
     const avatar = { ...this.state.avatar, ...Object.fromEntries(Object.entries(patch).filter(([, v]) => v !== undefined)) };
     this.set({ avatar });
     if (patch.enabled !== undefined) await this.host.updateConfig('avatar.enabled', avatar.enabled);
@@ -657,9 +712,9 @@ export class ChatController {
   }
 
   /** Settings changed outside the chat view. */
-  onConfigChanged(): void {
-    this.set({ avatar: { enabled: this.host.config<boolean>('avatar.enabled', true), style: this.host.config<'bot' | 'orb'>('avatar.style', 'bot') }, trusted: this.host.workspaceTrusted() });
-    if (this.state.engine === 'direct' || this.state.engine === 'vscode-lm') this.debounce('config', 400, () => void this.restartEngine());
+  onConfigChanged(providersChanged = true): void {
+    this.set({ avatar: { enabled: this.host.config<boolean>('avatar.enabled', true), style: avatarStyle(this.host.config<string>('avatar.style', 'buddy')) }, zoom: clampZoom(this.host.config<number>('chat.zoom', 1)), trusted: this.host.workspaceTrusted() });
+    if (providersChanged && (this.state.engine === 'direct' || this.state.engine === 'vscode-lm')) this.debounce('config', 400, () => void this.restartEngine());
   }
 
   showPanel(name: 'mcp' | 'usage' | 'sessions' | 'models'): void {
@@ -773,6 +828,7 @@ export class ChatController {
   async handleMessage(msg: WebviewToHost): Promise<void> {
     switch (msg.type) {
       case 'ready':
+        this.pendingEvents = [];
         this.webviewReady = true;
         this.host.post({ type: 'state', state: this.state });
         return;
@@ -842,6 +898,11 @@ export class ChatController {
         return this.host.insertIntoEditor(msg.text);
       case 'setAvatar':
         return this.setAvatar(msg);
+      case 'moveView':
+        await this.guard('Could not move the chat', () => this.host.moveView(msg.to));
+        return;
+      case 'zoom':
+        return msg.delta === 0 ? this.setZoom(1) : this.zoom(msg.delta);
       case 'manageProviders':
         return this.manageProviders();
       case 'restartEngine':
@@ -892,6 +953,16 @@ const ENGINE_DETAILS: Record<EngineId, string> = {
   codex: 'Your installed Codex CLI and its login (ChatGPT subscription or API key)',
   'vscode-lm': 'GitHub Copilot and other models exposed through VS Code',
 };
+
+/** Accepts the pre-release style names too. */
+function avatarStyle(value: string): AvatarStyle {
+  return value === 'dots' || value === 'orb' ? 'dots' : 'buddy';
+}
+
+function clampZoom(value: number): number {
+  const n = Number.isFinite(value) ? value : 1;
+  return Math.round(Math.min(1.6, Math.max(0.8, n)) * 100) / 100;
+}
 
 function safeId(url: string): string {
   try {

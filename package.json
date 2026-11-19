@@ -1,8 +1,8 @@
 {
   "name": "opencode-hub",
-  "displayName": "OpenCode Hub \u2014 BYOK AI Chat",
+  "displayName": "OpenCode Hub — BYOK AI Chat",
   "description": "Open-source chat for VS Code that works with opencode first, plus Claude Code, Codex (ChatGPT), GitHub Copilot and any OpenAI-compatible or Anthropic model with your own keys. Sessions, /commands, file attachments, MCP toggles, token usage stats and a 3D companion.",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "publisher": "rohit-chandra",
   "license": "MIT",
   "private": true,
@@ -40,7 +40,9 @@
     "vscode": "^1.98.0"
   },
   "main": "./dist/extension.js",
-  "activationEvents": [],
+  "activationEvents": [
+    "onWebviewPanel:opencodeHub.chatPanel"
+  ],
   "extensionKind": [
     "workspace"
   ],
@@ -72,6 +74,13 @@
           "title": "OpenCode Hub",
           "icon": "media/activity.svg"
         }
+      ],
+      "secondarySidebar": [
+        {
+          "id": "opencodeHubSecondary",
+          "title": "OpenCode Hub",
+          "icon": "media/activity.svg"
+        }
       ]
     },
     "views": {
@@ -100,24 +109,24 @@
       },
       {
         "command": "opencodeHub.switchSession",
-        "title": "Switch Session\u2026",
+        "title": "Switch Session…",
         "category": "OpenCode Hub",
         "icon": "$(history)"
       },
       {
         "command": "opencodeHub.selectEngine",
-        "title": "Select Engine\u2026",
+        "title": "Select Engine…",
         "category": "OpenCode Hub",
         "icon": "$(server-process)"
       },
       {
         "command": "opencodeHub.selectModel",
-        "title": "Select Model\u2026",
+        "title": "Select Model…",
         "category": "OpenCode Hub"
       },
       {
         "command": "opencodeHub.manageProviders",
-        "title": "Manage BYOK Providers & API Keys\u2026",
+        "title": "Manage BYOK Providers & API Keys…",
         "category": "OpenCode Hub",
         "icon": "$(key)"
       },
@@ -150,7 +159,7 @@
       },
       {
         "command": "opencodeHub.attachFiles",
-        "title": "Attach Files to Chat\u2026",
+        "title": "Attach Files to Chat…",
         "category": "OpenCode Hub"
       },
       {
@@ -172,10 +181,48 @@
         "command": "opencodeHub.abort",
         "title": "Stop Response",
         "category": "OpenCode Hub"
+      },
+      {
+        "command": "opencodeHub.moveToRight",
+        "title": "Move Chat to the Right (Secondary Side Bar)",
+        "category": "OpenCode Hub",
+        "icon": "$(layout-sidebar-right)"
+      },
+      {
+        "command": "opencodeHub.moveToLeft",
+        "title": "Move Chat to the Left (Primary Side Bar)",
+        "category": "OpenCode Hub",
+        "icon": "$(layout-sidebar-left)"
+      },
+      {
+        "command": "opencodeHub.openInEditor",
+        "title": "Open Chat in an Editor Tab",
+        "category": "OpenCode Hub",
+        "icon": "$(open-preview)"
+      },
+      {
+        "command": "opencodeHub.zoomIn",
+        "title": "Increase Chat Text Size",
+        "category": "OpenCode Hub"
+      },
+      {
+        "command": "opencodeHub.zoomOut",
+        "title": "Decrease Chat Text Size",
+        "category": "OpenCode Hub"
+      },
+      {
+        "command": "opencodeHub.zoomReset",
+        "title": "Reset Chat Text Size",
+        "category": "OpenCode Hub"
       }
     ],
     "menus": {
       "view/title": [
+        {
+          "command": "opencodeHub.openInEditor",
+          "when": "view == opencodeHub.chat",
+          "group": "navigation@9"
+        },
         {
           "command": "opencodeHub.selectEngine",
           "when": "view == opencodeHub.chat",
@@ -200,6 +247,31 @@
           "command": "opencodeHub.showLogs",
           "when": "view == opencodeHub.chat",
           "group": "2_view@2"
+        },
+        {
+          "command": "opencodeHub.moveToRight",
+          "when": "view == opencodeHub.chat",
+          "group": "0_layout@1"
+        },
+        {
+          "command": "opencodeHub.moveToLeft",
+          "when": "view == opencodeHub.chat",
+          "group": "0_layout@2"
+        },
+        {
+          "command": "opencodeHub.zoomIn",
+          "when": "view == opencodeHub.chat",
+          "group": "3_zoom@1"
+        },
+        {
+          "command": "opencodeHub.zoomOut",
+          "when": "view == opencodeHub.chat",
+          "group": "3_zoom@2"
+        },
+        {
+          "command": "opencodeHub.zoomReset",
+          "when": "view == opencodeHub.chat",
+          "group": "3_zoom@3"
         }
       ],
       "editor/context": [
@@ -237,6 +309,24 @@
         "key": "ctrl+alt+n",
         "mac": "cmd+alt+n",
         "when": "focusedView == opencodeHub.chat"
+      },
+      {
+        "command": "opencodeHub.zoomIn",
+        "key": "ctrl+alt+=",
+        "mac": "cmd+alt+=",
+        "when": "focusedView == opencodeHub.chat || activeWebviewPanelId == opencodeHub.chatPanel"
+      },
+      {
+        "command": "opencodeHub.zoomOut",
+        "key": "ctrl+alt+-",
+        "mac": "cmd+alt+-",
+        "when": "focusedView == opencodeHub.chat || activeWebviewPanelId == opencodeHub.chatPanel"
+      },
+      {
+        "command": "opencodeHub.zoomReset",
+        "key": "ctrl+alt+0",
+        "mac": "cmd+alt+0",
+        "when": "focusedView == opencodeHub.chat || activeWebviewPanelId == opencodeHub.chatPanel"
       }
     ],
     "configuration": {
@@ -326,7 +416,7 @@
         "opencodeHub.providers": {
           "type": "array",
           "default": [],
-          "markdownDescription": "Direct BYOK providers. API keys are **not** stored here \u2014 use *OpenCode Hub: Manage BYOK Providers & API Keys\u2026*.",
+          "markdownDescription": "Direct BYOK providers. API keys are **not** stored here — use *OpenCode Hub: Manage BYOK Providers & API Keys…*.",
           "items": {
             "type": "object",
             "required": [
@@ -436,14 +526,14 @@
         "opencodeHub.avatar.style": {
           "type": "string",
           "enum": [
-            "bot",
-            "orb"
+            "buddy",
+            "dots"
           ],
           "enumDescriptions": [
-            "Oki, a small robot that looks around and reacts.",
-            "A minimal glowing orb."
+            "Oki, a small round creature that works, celebrates and sulks along with the agent.",
+            "Five dots that rearrange themselves to show what is happening."
           ],
-          "default": "bot",
+          "default": "buddy",
           "description": "Companion style."
         },
         "opencodeHub.usage.statusBar": {
@@ -456,6 +546,13 @@
           "default": "",
           "editPresentation": "multilineText",
           "description": "Extra system prompt for the Direct BYOK and Copilot engines."
+        },
+        "opencodeHub.chat.zoom": {
+          "type": "number",
+          "default": 1,
+          "minimum": 0.8,
+          "maximum": 1.6,
+          "description": "Text scale of the chat view. 1 follows VS Code's font size."
         }
       }
     }

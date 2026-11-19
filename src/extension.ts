@@ -17,10 +17,13 @@ import { ChatController } from './ui/controller';
 import type { ControllerHost, PickItem } from './ui/controller';
 
 const SECTION = 'opencodeHub';
+const CONTAINER_LEFT = 'workbench.view.extension.opencodeHub';
+const CONTAINER_RIGHT = 'workbench.view.extension.opencodeHubSecondary';
 
 /** Returned from `activate` so integration tests (and other extensions) can drive the chat. */
 export interface OpencodeHubApi {
   controller: ChatController;
+  view: ChatViewProvider;
   engines: Map<EngineId, Engine>;
   ledger: UsageLedger;
 }
@@ -129,7 +132,24 @@ export async function activate(context: vscode.ExtensionContext): Promise<Openco
       terminal.show();
       terminal.sendText(command);
     },
-    focusView: async () => void (await vscode.commands.executeCommand(`${ChatViewProvider.viewId}.focus`)),
+    focusView: async () => {
+      if (view.panelOnly) view.revealPanel();
+      else await vscode.commands.executeCommand(`${ChatViewProvider.viewId}.focus`);
+    },
+    moveView: async (to) => {
+      if (to === 'editor') return view.openPanel();
+      // View containers contributed by an extension get a command named after their id.
+      const destination = to === 'right' ? CONTAINER_RIGHT : CONTAINER_LEFT;
+      if (!(await vscode.commands.getCommands(true)).includes(destination)) {
+        // Older VS Code cannot contribute a secondary side bar container: let the user pick the place.
+        await vscode.commands.executeCommand(`${ChatViewProvider.viewId}.focus`);
+        await vscode.commands.executeCommand('workbench.action.moveFocusedView');
+        void vscode.window.showInformationMessage('Choose "New Secondary Side Bar Entry" to dock the chat on the right. You can also drag the chat icon there.');
+        return;
+      }
+      await vscode.commands.executeCommand('vscode.moveViews', { viewIds: [ChatViewProvider.viewId], destinationId: destination });
+      await vscode.commands.executeCommand(`${ChatViewProvider.viewId}.focus`);
+    },
   };
 
   const controller = new ChatController(engines, ledger, host);
@@ -202,6 +222,12 @@ export async function activate(context: vscode.ExtensionContext): Promise<Openco
   reg('opencodeHub.restartEngine', () => controller.restartEngine());
   reg('opencodeHub.showLogs', () => log.show());
   reg('opencodeHub.abort', () => controller.abort());
+  reg('opencodeHub.moveToRight', () => host.moveView('right'));
+  reg('opencodeHub.moveToLeft', () => host.moveView('left'));
+  reg('opencodeHub.openInEditor', () => host.moveView('editor'));
+  reg('opencodeHub.zoomIn', () => controller.zoom(0.1));
+  reg('opencodeHub.zoomOut', () => controller.zoom(-0.1));
+  reg('opencodeHub.zoomReset', () => controller.setZoom(1));
   reg('opencodeHub.attachActiveFile', async (uri?: vscode.Uri) => {
     const target = uri ?? vscode.window.activeTextEditor?.document.uri;
     if (target?.scheme !== 'file') return;
@@ -224,11 +250,13 @@ export async function activate(context: vscode.ExtensionContext): Promise<Openco
 
   context.subscriptions.push(
     vscode.window.registerWebviewViewProvider(ChatViewProvider.viewId, view, { webviewOptions: { retainContextWhenHidden: true } }),
+    vscode.window.registerWebviewPanelSerializer(ChatViewProvider.panelType, view),
     vscode.workspace.onDidChangeConfiguration((e) => {
       if (!e.affectsConfiguration(SECTION)) return;
       renderStatus();
       if (e.affectsConfiguration(`${SECTION}.mcp`)) void mcp.sync();
-      if (e.affectsConfiguration(`${SECTION}.providers`) || e.affectsConfiguration(`${SECTION}.avatar`)) controller.onConfigChanged();
+      const providers = e.affectsConfiguration(`${SECTION}.providers`);
+      if (providers || e.affectsConfiguration(`${SECTION}.avatar`) || e.affectsConfiguration(`${SECTION}.chat`)) controller.onConfigChanged(providers);
     }),
     vscode.workspace.onDidGrantWorkspaceTrust(() => void controller.onTrustChanged()),
     {
@@ -243,7 +271,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<Openco
 
   // Start in the background: activation must not wait for a CLI to boot.
   void controller.activate().catch((err) => log.error(`Activation failed: ${err instanceof Error ? (err.stack ?? err.message) : String(err)}`));
-  return { controller, engines, ledger };
+  return { controller, view, engines, ledger };
 }
 
 export function deactivate(): void {

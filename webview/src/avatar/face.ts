@@ -1,165 +1,297 @@
-export type Mood = 'idle' | 'thinking' | 'speaking' | 'tool' | 'waiting' | 'error' | 'happy';
+export type Mood = 'idle' | 'listening' | 'thinking' | 'speaking' | 'working' | 'waiting' | 'happy' | 'excited' | 'sad' | 'sleepy';
+/** What the agent is doing while "working"; picks the prop Oki holds. */
+export type WorkKind = 'build' | 'edit' | 'search';
+export type Reaction = 'success' | 'fail' | 'poke';
 
 export const MOOD_COLORS: Record<Mood, string> = {
   idle: '#42e0cf',
+  listening: '#6cc8ff',
   thinking: '#ffb84d',
   speaking: '#42e0cf',
-  tool: '#a394ff',
+  working: '#a394ff',
   waiting: '#ffd166',
-  error: '#ff6b6b',
   happy: '#7df29a',
+  excited: '#ff9ad5',
+  sad: '#7f9ac9',
+  sleepy: '#9aa3c7',
 };
 
 export interface FaceParams {
   mood: Mood;
-  /** Seconds since start; drives blinking and mouth animation. */
+  /** Seconds since start. */
   t: number;
   /** Gaze offset, each in -1..1. */
   gazeX: number;
   gazeY: number;
-  /** 0..1, how lively the mouth meter is while speaking. */
+  /** 0..1, how lively the mouth is while speaking. */
   energy: number;
-  color: string;
+  /** 0 (closed) .. 1 (open). */
+  blink: number;
 }
 
-function roundRect(g: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, r: number): void {
-  const rr = Math.min(r, w / 2, h / 2);
+const INK = '#172033';
+const TONGUE = '#ff8fa8';
+const BLUSH = '#ff6f96';
+const TEAR = '#8fd3ff';
+
+function ellipse(g: CanvasRenderingContext2D, x: number, y: number, rx: number, ry: number): void {
   g.beginPath();
-  g.moveTo(x + rr, y);
-  g.arcTo(x + w, y, x + w, y + h, rr);
-  g.arcTo(x + w, y + h, x, y + h, rr);
-  g.arcTo(x, y + h, x, y, rr);
-  g.arcTo(x, y, x + w, y, rr);
+  g.ellipse(x, y, Math.max(0.1, rx), Math.max(0.1, ry), 0, 0, Math.PI * 2);
+}
+
+function star(g: CanvasRenderingContext2D, x: number, y: number, r: number, rot = 0): void {
+  g.beginPath();
+  for (let i = 0; i < 8; i++) {
+    const a = rot + (i * Math.PI) / 4;
+    const rr = i % 2 === 0 ? r : r * 0.32;
+    g.lineTo(x + Math.cos(a) * rr, y + Math.sin(a) * rr);
+  }
   g.closePath();
 }
 
-/** Blink roughly every 4 s; returns eye openness 0..1. */
-function blink(t: number): number {
-  const phase = (t + 1.3) % 4.2;
-  if (phase > 0.16) return 1;
-  return Math.abs(phase - 0.08) / 0.08;
-}
-
 /**
- * Draw Oki's visor: a dark glass panel with two eyes and a small mouth that change with the
- * mood. Pure 2D canvas, used as a texture on the 3D head and directly by the 2D fallback.
+ * Draw Oki's face on a transparent canvas: big glossy eyes, brows, blush and a mouth that
+ * change with the mood. Used as a decal on the 3D body and directly by the 2D fallback.
  */
 export function drawFace(g: CanvasRenderingContext2D, w: number, h: number, p: FaceParams): void {
   g.clearRect(0, 0, w, h);
-  const pad = w * 0.035;
-  roundRect(g, pad, pad, w - pad * 2, h - pad * 2, h * 0.42);
-  const glass = g.createLinearGradient(0, 0, 0, h);
-  glass.addColorStop(0, '#1b2233');
-  glass.addColorStop(1, '#0a0e17');
-  g.fillStyle = glass;
-  g.fill();
-  // Soft sheen across the top-left of the glass.
-  g.save();
-  g.clip();
-  const sheen = g.createLinearGradient(0, 0, w * 0.7, h * 0.9);
-  sheen.addColorStop(0, 'rgba(255,255,255,0.16)');
-  sheen.addColorStop(0.35, 'rgba(255,255,255,0.03)');
-  sheen.addColorStop(1, 'rgba(255,255,255,0)');
-  g.fillStyle = sheen;
-  g.fillRect(0, 0, w, h * 0.6);
-  g.restore();
-
-  const cx = w / 2 + p.gazeX * w * 0.045;
-  const cy = h * 0.44 + p.gazeY * h * 0.07;
-  const gap = w * 0.17;
-  const ew = w * 0.085;
-  let eh = h * 0.27;
-  g.fillStyle = p.color;
-  g.strokeStyle = p.color;
   g.lineCap = 'round';
-  g.shadowColor = p.color;
-  g.shadowBlur = w * 0.05;
+  g.lineJoin = 'round';
+  const { mood, t } = p;
+  let gx = p.gazeX;
+  let gy = p.gazeY;
+  if (mood === 'thinking') {
+    gx = -0.7 + Math.sin(t * 0.8) * 0.15;
+    gy = -0.8;
+  } else if (mood === 'listening') {
+    gy = Math.max(gy, 0.55);
+  } else if (mood === 'working') {
+    gy = 0.5;
+    gx = 0.35;
+  } else if (mood === 'sad') {
+    gy = 0.6;
+  }
+  const cx = w / 2 + gx * w * 0.035;
+  const cy = h * 0.45 + gy * h * 0.04;
+  const gap = w * 0.2;
+  const big = mood === 'waiting' ? 1.14 : mood === 'listening' ? 1.07 : mood === 'excited' ? 1.1 : 1;
+  const rx = w * 0.104 * big;
+  const ry = h * 0.205 * big;
+
+  // Blush
+  const blush = mood === 'happy' || mood === 'excited' ? 0.9 : mood === 'sad' || mood === 'sleepy' ? 0.4 : mood === 'waiting' ? 0.75 : 0.6;
+  g.fillStyle = BLUSH;
+  g.globalAlpha = blush;
+  for (const side of [-1, 1]) {
+    ellipse(g, cx + side * gap * 1.5, cy + h * 0.2, w * 0.07, h * 0.05);
+    g.fill();
+  }
+  g.globalAlpha = 1;
 
   const eye = (x: number, side: -1 | 1) => {
-    switch (p.mood) {
-      case 'happy': {
-        g.lineWidth = w * 0.03;
-        g.beginPath();
-        g.arc(x, cy + h * 0.07, ew * 1.05, Math.PI * 1.12, Math.PI * 1.88);
-        g.stroke();
-        return;
-      }
-      case 'error': {
-        g.lineWidth = w * 0.028;
-        g.beginPath();
-        g.moveTo(x - ew, cy - side * h * 0.05);
-        g.lineTo(x + ew, cy + side * h * 0.05);
-        g.stroke();
-        return;
-      }
-      case 'thinking': {
-        // Eyes narrow and scan from side to side.
-        const scan = Math.sin(p.t * 2.2) * w * 0.035;
-        roundRect(g, x - ew * 0.75 + scan, cy - eh * 0.2, ew * 1.5, eh * 0.4, ew);
+    g.fillStyle = INK;
+    g.strokeStyle = INK;
+    if (mood === 'happy' || (mood === 'idle' && p.blink < 0.25) || (mood === 'speaking' && p.blink < 0.25)) {
+      // Smiling or blinking: a curved line that bulges upward.
+      g.lineWidth = w * 0.03;
+      g.beginPath();
+      g.arc(x, cy + ry * 0.45, rx * 1.05, Math.PI * 1.12, Math.PI * 1.88);
+      g.stroke();
+      return;
+    }
+    if (mood === 'sleepy') {
+      g.lineWidth = w * 0.028;
+      g.beginPath();
+      g.arc(x, cy - ry * 0.2, rx, Math.PI * 0.15, Math.PI * 0.85);
+      g.stroke();
+      return;
+    }
+    const open = mood === 'excited' || mood === 'waiting' ? Math.max(p.blink, 0.9) : p.blink;
+    const ey = ry * Math.max(0.1, open);
+    ellipse(g, x, cy, rx, ey);
+    g.fill();
+    if (open > 0.45) {
+      g.fillStyle = '#ffffff';
+      if (mood === 'excited') {
+        star(g, x - rx * 0.1, cy - ey * 0.12, rx * (0.72 + 0.12 * Math.sin(t * 9 + side)), t * 1.5);
         g.fill();
-        return;
-      }
-      case 'tool': {
-        // Focused: slanted lids.
-        g.save();
-        g.translate(x, cy);
-        g.rotate(side * -0.22);
-        roundRect(g, -ew, -eh * 0.28, ew * 2, eh * 0.56, ew * 0.5);
+        ellipse(g, x + rx * 0.42, cy + ey * 0.5, rx * 0.14, rx * 0.14);
         g.fill();
-        g.restore();
-        return;
-      }
-      case 'waiting': {
-        const pulse = 1 + Math.sin(p.t * 3) * 0.06;
-        g.beginPath();
-        g.ellipse(x, cy, ew * 1.15 * pulse, eh * 0.55 * pulse, 0, 0, Math.PI * 2);
+      } else {
+        const shimmer = mood === 'waiting' ? 1 + 0.12 * Math.sin(t * 5) : 1;
+        ellipse(g, x - rx * 0.3 + gx * rx * 0.25, cy - ey * 0.36 + gy * ey * 0.15, rx * 0.36 * shimmer, rx * 0.36 * shimmer);
         g.fill();
-        return;
-      }
-      default: {
-        const open = blink(p.t);
-        const hh = Math.max(h * 0.025, eh * open);
-        roundRect(g, x - ew, cy - hh / 2, ew * 2, hh, ew);
+        ellipse(g, x + rx * 0.34 + gx * rx * 0.2, cy + ey * 0.38, rx * 0.17 * shimmer, rx * 0.17 * shimmer);
         g.fill();
+        if (mood === 'waiting') {
+          ellipse(g, x + rx * 0.05, cy + ey * 0.05, rx * 0.1, rx * 0.1);
+          g.fill();
+        }
       }
     }
+    // Eyelids are cut out of the eye so they work on any body colour.
+    g.save();
+    g.globalCompositeOperation = 'destination-out';
+    g.fillStyle = '#000';
+    if (mood === 'working') {
+      g.translate(x, cy - ey * 0.95);
+      g.rotate(side * 0.34);
+      g.fillRect(-rx * 2, -ey, rx * 4, ey * 0.95);
+    } else if (mood === 'sad') {
+      g.translate(x, cy - ey * 1.02);
+      g.rotate(side * -0.36);
+      g.fillRect(-rx * 2, -ey, rx * 4, ey * 0.98);
+    } else if (mood === 'thinking' && side === 1) {
+      g.fillRect(x - rx * 2, cy - ey * 2, rx * 4, ey * 1.3);
+    }
+    g.restore();
   };
-  if (p.mood === 'speaking') eh *= 0.9 + p.energy * 0.15;
   eye(cx - gap, -1);
   eye(cx + gap, 1);
 
-  // Mouth
-  const my = h * 0.74 + p.gazeY * h * 0.03;
-  g.shadowBlur = w * 0.03;
-  if (p.mood === 'speaking') {
-    const bars = 5;
-    const bw = w * 0.022;
-    const spacing = w * 0.04;
-    for (let i = 0; i < bars; i++) {
-      const wave = 0.35 + 0.65 * Math.abs(Math.sin(p.t * (7 + i * 1.7) + i * 1.3));
-      const bh = h * (0.03 + 0.13 * wave * (0.35 + 0.65 * p.energy));
-      roundRect(g, cx + (i - (bars - 1) / 2) * spacing - bw / 2, my - bh / 2, bw, bh, bw / 2);
+  // Brows
+  g.strokeStyle = INK;
+  g.lineWidth = w * 0.024;
+  const brow = (side: -1 | 1, lift: number, angle: number) => {
+    const x = cx + side * gap;
+    const y = cy - ry * 1.22 - lift * h;
+    g.save();
+    g.translate(x, y);
+    g.rotate(side * angle);
+    g.beginPath();
+    g.moveTo(-rx * 0.75, 0);
+    g.quadraticCurveTo(0, -h * 0.018, rx * 0.75, 0);
+    g.stroke();
+    g.restore();
+  };
+  if (mood === 'working') {
+    brow(-1, -0.035, -0.42);
+    brow(1, -0.035, -0.42);
+  } else if (mood === 'sad') {
+    brow(-1, 0.0, 0.42);
+    brow(1, 0.0, 0.42);
+  } else if (mood === 'thinking') {
+    brow(-1, 0.035, 0.1);
+    brow(1, -0.01, -0.2);
+  } else if (mood === 'waiting' || mood === 'listening' || mood === 'excited') {
+    brow(-1, 0.03, 0.14);
+    brow(1, 0.03, 0.14);
+  }
+
+  // Tears and sweat
+  if (mood === 'sad') {
+    g.fillStyle = TEAR;
+    for (const side of [-1, 1]) {
+      const fall = (t * 0.55 + (side > 0 ? 0.45 : 0)) % 1;
+      const x = cx + side * (gap + rx * 0.35);
+      const y = cy + ry * 0.75 + fall * h * 0.24;
+      g.globalAlpha = 1 - fall * 0.7;
+      g.beginPath();
+      g.moveTo(x, y - h * 0.045);
+      g.quadraticCurveTo(x + w * 0.03, y + h * 0.015, x, y + h * 0.03);
+      g.quadraticCurveTo(x - w * 0.03, y + h * 0.015, x, y - h * 0.045);
       g.fill();
     }
-  } else if (p.mood === 'happy') {
-    g.lineWidth = w * 0.022;
+    g.globalAlpha = 1;
+  }
+  if (mood === 'working' && (t % 3.2) < 1.4) {
+    const fall = (t % 3.2) / 1.4;
+    g.fillStyle = TEAR;
+    g.globalAlpha = 1 - fall;
+    const x = cx + gap * 1.75;
+    const y = cy - ry * 0.9 + fall * h * 0.16;
     g.beginPath();
-    g.arc(cx, my - h * 0.06, w * 0.06, Math.PI * 0.15, Math.PI * 0.85);
-    g.stroke();
-  } else if (p.mood === 'error') {
-    g.lineWidth = w * 0.02;
-    g.beginPath();
-    g.arc(cx, my + h * 0.06, w * 0.05, Math.PI * 1.2, Math.PI * 1.8);
-    g.stroke();
-  } else if (p.mood === 'waiting') {
-    g.beginPath();
-    g.arc(cx, my, w * 0.016, 0, Math.PI * 2);
-    g.fill();
-  } else {
-    g.globalAlpha = 0.75;
-    roundRect(g, cx - w * 0.035, my - h * 0.012, w * 0.07, h * 0.024, h * 0.012);
+    g.moveTo(x, y - h * 0.04);
+    g.quadraticCurveTo(x + w * 0.026, y + h * 0.012, x, y + h * 0.026);
+    g.quadraticCurveTo(x - w * 0.026, y + h * 0.012, x, y - h * 0.04);
     g.fill();
     g.globalAlpha = 1;
   }
-  g.shadowBlur = 0;
+
+  // Mouth
+  const mx = cx + (mood === 'thinking' ? w * 0.03 : 0);
+  const my = h * 0.76 + gy * h * 0.02;
+  g.strokeStyle = INK;
+  g.fillStyle = INK;
+  g.lineWidth = w * 0.022;
+  const openMouth = (mw: number, mh: number) => {
+    // A "D" shaped open mouth with a tongue.
+    g.beginPath();
+    g.moveTo(mx - mw, my - mh * 0.25);
+    g.quadraticCurveTo(mx, my - mh * 0.05, mx + mw, my - mh * 0.25);
+    g.bezierCurveTo(mx + mw * 0.95, my + mh * 1.1, mx - mw * 0.95, my + mh * 1.1, mx - mw, my - mh * 0.25);
+    g.fill();
+    g.save();
+    g.clip();
+    g.fillStyle = TONGUE;
+    ellipse(g, mx, my + mh * 0.95, mw * 0.62, mh * 0.5);
+    g.fill();
+    g.restore();
+  };
+  switch (mood) {
+    case 'speaking': {
+      const open = 0.25 + 0.75 * Math.abs(Math.sin(t * 9.5)) * (0.45 + 0.55 * p.energy);
+      ellipse(g, mx, my + h * 0.01, w * (0.04 + 0.012 * (1 - open)), h * (0.02 + 0.065 * open));
+      g.fill();
+      if (open > 0.5) {
+        g.fillStyle = TONGUE;
+        ellipse(g, mx, my + h * (0.035 + 0.03 * open), w * 0.026, h * 0.022);
+        g.fill();
+      }
+      break;
+    }
+    case 'happy':
+      openMouth(w * 0.07, h * 0.09);
+      break;
+    case 'excited':
+      openMouth(w * 0.085, h * (0.115 + 0.015 * Math.sin(t * 12)));
+      break;
+    case 'sad': {
+      const wob = Math.sin(t * 7) * h * 0.006;
+      g.beginPath();
+      g.moveTo(mx - w * 0.05, my + h * 0.035);
+      g.quadraticCurveTo(mx - w * 0.02, my - h * 0.03 + wob, mx, my - h * 0.012);
+      g.quadraticCurveTo(mx + w * 0.02, my - h * 0.03 - wob, mx + w * 0.05, my + h * 0.035);
+      g.stroke();
+      break;
+    }
+    case 'thinking':
+      g.beginPath();
+      g.moveTo(mx - w * 0.035, my + h * 0.005);
+      g.quadraticCurveTo(mx - w * 0.01, my - h * 0.02, mx + w * 0.012, my + h * 0.005);
+      g.quadraticCurveTo(mx + w * 0.028, my + h * 0.02, mx + w * 0.045, my);
+      g.stroke();
+      break;
+    case 'working':
+      g.beginPath();
+      g.moveTo(mx - w * 0.04, my);
+      g.lineTo(mx + w * 0.04, my);
+      g.stroke();
+      g.fillStyle = TONGUE;
+      ellipse(g, mx + w * 0.03, my + h * 0.022, w * 0.022, h * 0.03);
+      g.fill();
+      break;
+    case 'waiting':
+    case 'listening':
+      ellipse(g, mx, my, w * 0.02, h * (mood === 'waiting' ? 0.03 : 0.022));
+      g.fill();
+      break;
+    case 'sleepy': {
+      const breathe = 0.6 + 0.4 * Math.sin(t * 1.3);
+      ellipse(g, mx, my, w * 0.016 * breathe, h * 0.022 * breathe);
+      g.fill();
+      break;
+    }
+    default:
+      g.beginPath();
+      g.arc(mx, my - h * 0.05, w * 0.055, Math.PI * 0.2, Math.PI * 0.8);
+      g.stroke();
+  }
+}
+
+/** Blink roughly every four seconds; returns eye openness 0..1. */
+export function blinkAt(t: number): number {
+  const phase = (t + 1.3) % 4.3;
+  if (phase > 0.18) return 1;
+  return Math.abs(phase - 0.09) / 0.09;
 }

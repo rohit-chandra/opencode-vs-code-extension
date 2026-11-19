@@ -19,6 +19,8 @@ import type {
   UsageSummary,
 } from './types';
 
+export type AvatarStyle = 'buddy' | 'dots';
+
 /** Everything the chat view renders. The host owns it; the webview holds a mirror. */
 export interface ViewState {
   engine: EngineId;
@@ -40,7 +42,9 @@ export interface ViewState {
   questions: QuestionRequest[];
   sessionUsage: SessionUsage | undefined;
   usage: UsageSummary | undefined;
-  avatar: { enabled: boolean; style: 'bot' | 'orb' };
+  avatar: { enabled: boolean; style: AvatarStyle };
+  /** Text scale of the chat (1 = VS Code's font size). */
+  zoom: number;
   trusted: boolean;
   /** Bumped when the host wants the webview to open a panel (e.g. from a command). */
   panel: { name: 'none' | 'sessions' | 'mcp' | 'usage' | 'models'; nonce: number };
@@ -52,6 +56,8 @@ export type HostToWebview =
   | { type: 'state'; state: ViewState }
   | { type: 'patch'; patch: Partial<ViewState> }
   | { type: 'event'; event: EngineEvent }
+  /** Streaming events coalesced by the host (one message per ~frame instead of one per token). */
+  | { type: 'events'; events: EngineEvent[] }
   | { type: 'fileResults'; requestId: number; files: { path: string; relative: string }[] }
   | { type: 'insertText'; text: string }
   | { type: 'focusInput' }
@@ -84,7 +90,9 @@ export type WebviewToHost =
   | { type: 'openExternal'; url: string }
   | { type: 'copy'; text: string }
   | { type: 'insertCode'; text: string }
-  | { type: 'setAvatar'; enabled?: boolean; style?: 'bot' | 'orb' }
+  | { type: 'setAvatar'; enabled?: boolean; style?: AvatarStyle }
+  | { type: 'moveView'; to: 'left' | 'right' | 'editor' }
+  | { type: 'zoom'; delta: number }
   | { type: 'manageProviders' }
   | { type: 'restartEngine' }
   | { type: 'openSettings' }

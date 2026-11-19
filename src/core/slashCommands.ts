@@ -20,7 +20,9 @@ export const BUILTIN_COMMANDS: SlashCommand[] = [
   { name: 'export', description: 'Export this session as Markdown', source: 'builtin' },
   { name: 'providers', description: 'Connect providers and manage API keys', source: 'builtin' },
   { name: 'stop', description: 'Stop the current response', source: 'builtin' },
-  { name: 'avatar', description: 'Show or hide the 3D companion', source: 'builtin', argumentHint: '[on|off|bot|orb]' },
+  { name: 'avatar', description: 'Show, hide or restyle the 3D companion', source: 'builtin', argumentHint: '[on|off|buddy|dots]' },
+  { name: 'move', description: 'Dock the chat left, right, or open it as an editor tab', source: 'builtin', argumentHint: '[left|right|editor]' },
+  { name: 'zoom', description: 'Make the chat text larger or smaller', source: 'builtin', argumentHint: '[in|out|reset|120%]' },
   { name: 'clear', description: 'Clear the chat (starts a new session)', source: 'builtin' },
   { name: 'help', description: 'List available commands', source: 'builtin' },
 ];

@@ -399,6 +399,13 @@
           "scope": "application",
           "markdownDescription": "Whether the agent asks for approval before it acts. `auto` approves every tool call, command and edit without asking: opencode permission requests, Claude Code tool permissions, and MCP tools in Direct BYOK and Copilot. Codex never stops to ask; its `opencodeHub.codex.sandbox` decides what it may do. Switch from the chat with the Ask/Auto button, `/auto` or `/ask`. User setting only, so a workspace cannot turn it on."
         },
+        "opencodeHub.sessions.keepDays": {
+          "type": "number",
+          "default": 30,
+          "minimum": 0,
+          "scope": "application",
+          "markdownDescription": "Delete saved chat sessions that have not been used for this many days (checked when VS Code starts). `0` keeps them forever. The default, 30, matches Claude Code. Applies to Claude Code, Codex, Direct BYOK and Copilot sessions, which the extension stores in your VS Code profile on this computer; opencode keeps its own session history."
+        },
         "opencodeHub.claudeCode.path": {
           "type": "string",
           "default": "",

@@ -25,7 +25,7 @@ One chat, five interchangeable engines, and the same features on all of them: se
 | **Codex** | Your installed `codex` CLI | Your ChatGPT account (Plus / Pro / Team) by default; an OpenAI API key if you choose it |
 | **Copilot / VS Code models** | VS Code's Language Model API | Your GitHub Copilot subscription, plus models other extensions register |
 
-Switch at any time with `/engine` or the engine button under the message box. Each engine keeps its own sessions and model choice per workspace.
+Switch at any time with `/engine` or the engine button under the message box. Each engine keeps its own sessions and model choice per folder, and the history shows all of them (see [Sessions](#sessions)).
 
 ## Install
 
@@ -245,6 +245,21 @@ Type `/` to see every command, filtered as you type. Commands defined by the eng
 - Paste an image from the clipboard.
 - Select code and press `Ctrl+Alt+L`, or right-click → **Add Selection to Chat**.
 
+### Sessions
+
+The history button (or `/sessions`) lists your saved sessions. **All engines** shows every engine's sessions for this folder in one list, newest first, each labelled with its engine; opening one switches to that engine. The other tab shows only the current engine. After a restart the chat opens on the engine and session you were last using, even in a window with no folder open.
+
+**Everything stays on your computer.** Nothing is uploaded anywhere by the extension.
+
+| Engine | Where sessions are kept |
+|---|---|
+| opencode | opencode's own storage (`~/.local/share/opencode`), managed by opencode |
+| Claude Code, Codex, Direct BYOK, Copilot | Your VS Code profile folder (`globalStorage/rohit-chandra.opencode-hub/sessions/`), one JSON file per session, readable only by your user account on macOS and Linux (Windows keeps it in your private profile folder). Claude Code and Codex also keep their own transcripts as usual |
+
+- **Saved as you go.** A conversation is written when you send a message and every few seconds while the reply streams, so closing VS Code mid-reply keeps it. Claude Code and Codex conversations can be continued after a restart.
+- **Memory stays flat.** Listing reads a small index of titles and dates; a conversation's messages are read from disk when you open it, and only the last few opened stay in memory.
+- **Old sessions are cleaned up.** Sessions not used for 30 days are deleted when VS Code starts, like Claude Code's default. Change it with `opencodeHub.sessions.keepDays` (`0` keeps everything). opencode's sessions follow opencode's own rules.
+
 ### Ask or Auto
 
 The shield button under the message box chooses whether the agent asks before it acts.
@@ -450,6 +465,7 @@ Measured with the UI test suite (headless Chrome, software rendering): a reply s
 | `opencodeHub.opencode.path` | | Path to `opencode` if it is not on `PATH` |
 | `opencodeHub.opencode.serverUrl` | | Attach to a running `opencode serve` instead of starting one |
 | `opencodeHub.opencode.serverPassword` | | Password of that server |
+| `opencodeHub.sessions.keepDays` | `30` | Delete saved sessions unused for this many days (`0` keeps them) |
 | `opencodeHub.approvals` | `ask` | `ask` before the agent acts, or `auto` to proceed without asking (user setting only) |
 | `opencodeHub.providers` | `[]` | Direct BYOK providers (no keys here) |
 | `opencodeHub.mcp.servers` | `{}` | MCP servers for Direct BYOK and Copilot |

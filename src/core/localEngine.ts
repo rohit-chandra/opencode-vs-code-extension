@@ -137,7 +137,7 @@ export abstract class LocalEngine implements Engine {
   }
 
   protected get store(): LocalSessionStore {
-    this._store ??= new LocalSessionStore(this.ctx.storageDir, this.id, this.ctx.cwd() ?? '');
+    this._store ??= new LocalSessionStore(this.ctx.storageDir, this.id, this.ctx.cwd() ?? '', keepDays(this.ctx.config<number>('sessions.keepDays', 30)));
     return this._store;
   }
 
@@ -177,8 +177,14 @@ export abstract class LocalEngine implements Engine {
     return this.start();
   }
 
+  /** Turns in flight; shutdown waits for them to save what they have. */
+  private turns = new Set<Promise<void>>();
+
   async dispose(): Promise<void> {
     for (const c of this.running.values()) c.abort();
+    // Give stopped turns a moment to write their last state, then wait for the disk.
+    await Promise.race([Promise.all([...this.turns]), new Promise((r) => setTimeout(r, 2000))]);
+    await this._store?.flush().catch(() => undefined);
     this.running.clear();
     this.emitter.dispose();
   }
@@ -289,9 +295,16 @@ export abstract class LocalEngine implements Engine {
     this.emit({ type: 'message.updated', message: structuredClone(assistantMessage) });
     this.emit({ type: 'session.status', sessionId, activity: 'busy' });
 
+    // Save right away, and every few seconds while the reply streams, so closing VS Code
+    // in the middle of a reply keeps the conversation.
+    this.store.pin(sessionId);
+    const save = () => this.store.persist(sessionId).catch((e) => this.ctx.log.warn(`Could not save session: ${errorMessage(e)}`));
+    void save();
+    const autosave = setInterval(() => void save(), 3000);
+
     const writer = new AssistantWriter(assistantMessage, this.emit);
     // Run detached: callers get control back as soon as the turn has started.
-    void (async () => {
+    const turn = (async () => {
       try {
         await this.runTurn({ session, input, user, assistant: writer, signal: controller.signal, model: input.model });
       } catch (err) {
@@ -300,6 +313,7 @@ export abstract class LocalEngine implements Engine {
           this.ctx.log.error(`[${this.id}] turn failed: ${errorMessage(err)}`);
         }
       } finally {
+        clearInterval(autosave);
         this.running.delete(sessionId);
         this.cancelPermissions(sessionId);
         if (controller.signal.aborted) {
@@ -309,7 +323,8 @@ export abstract class LocalEngine implements Engine {
         assistantMessage.completedAt = Date.now();
         if (writer.usageKnown) assistantMessage.usage = writer.usage;
         session.info = { ...session.info, updatedAt: assistantMessage.completedAt };
-        await this.store.persist(sessionId).catch((e) => this.ctx.log.warn(`Could not save session: ${errorMessage(e)}`));
+        await save();
+        this.store.unpin(sessionId);
         this.emit({ type: 'message.updated', message: structuredClone(assistantMessage) });
         if (assistantMessage.usage && assistantMessage.model) {
           this.emit({ type: 'usage', sessionId, messageId: assistantMessage.id, model: assistantMessage.model, usage: assistantMessage.usage });
@@ -318,6 +333,8 @@ export abstract class LocalEngine implements Engine {
         this.emit({ type: 'session.status', sessionId, activity: 'idle' });
       }
     })();
+    this.turns.add(turn);
+    void turn.finally(() => this.turns.delete(turn));
   }
 
   async abort(sessionId: string): Promise<void> {
@@ -363,4 +380,9 @@ export abstract class LocalEngine implements Engine {
   private cancelPermissions(sessionId: string): void {
     for (const p of [...this.pendingPermissions.values()]) if (p.sessionId === sessionId) p.resolve('reject');
   }
+}
+
+function keepDays(value: unknown): number {
+  const n = Number(value);
+  return Number.isFinite(n) && n >= 0 ? Math.floor(n) : 30;
 }

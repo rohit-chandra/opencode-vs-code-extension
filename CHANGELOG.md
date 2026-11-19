@@ -11,8 +11,16 @@
 - A **per-reply** table in the usage panel's "This session" section: model, tokens in and out, and cost of each reply.
 - **Claude Code and Codex list the models your plan includes, by their real names.** Claude Code's models come from the CLI itself for the signed-in account (for example *Default (Opus 5.5)*, *Fable 5.2*, *Opus 5.5*, *Sonnet 5.5*, *Haiku 5.5*) instead of the bare aliases `opus`, `sonnet`, `haiku`; Codex's come from `codex app-server` (the GPT models of your ChatGPT plan). The list refreshes after you sign in or switch to an API key. The model picker also shows a short description of each model.
 
+- **One history for every engine.** The sessions panel lists every engine's saved sessions for the folder (All engines), labelled by engine; opening one switches engine. A tab shows only the current engine.
+- `opencodeHub.sessions.keepDays` (default 30, like Claude Code): sessions unused for longer are deleted at start-up; `0` keeps everything.
+
+### Fixed
+
+- **Sessions no longer look lost after closing VS Code.** Conversations are saved when you send and every few seconds while a reply streams (before, only when the reply finished), VS Code waits for the last write on shutdown, and Claude Code / Codex conversation ids are kept from the first event so they resume after a restart. The last engine and session are remembered per folder in the profile, so they come back even in a window with no folder open.
+
 ### Changed
 
+- Saved sessions are listed from a small index and a conversation is read from disk only when opened (at most 8 stay in memory), so memory no longer grows with the number of sessions. Session files are readable only by your user account on macOS and Linux.
 - The token count moved from the top bar's usage icon to the session pill under the message box.
 - In a typical side bar width, the Ask label and the session cost collapse into their tooltips so the model name keeps its room. Auto always stays labelled.
 

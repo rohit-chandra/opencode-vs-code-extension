@@ -2,7 +2,7 @@ import * as path from 'node:path';
 import * as vscode from 'vscode';
 import type { Engine, EngineContext } from './core/engine';
 import { newId } from './core/ids';
-import { UsageLedger } from './core/usageLedger';
+import { UsageLedger, folderScopedState } from './core/usageLedger';
 import { ClaudeCodeEngine } from './engines/cli/claudeCode';
 import { CodexEngine } from './engines/cli/codex';
 import { DirectEngine } from './engines/direct/engine';
@@ -78,7 +78,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<Openco
   const host: ControllerHost = {
     log,
     post: (m) => view.post(m),
-    state: context.workspaceState,
+    state: folderScopedState(context.globalState, context.workspaceState, cwd),
     secrets: engineContext.secrets,
     config: engineContext.config,
     updateConfig,
@@ -267,18 +267,31 @@ export async function activate(context: vscode.ExtensionContext): Promise<Openco
         controller.dispose();
         void ledger.flush();
         void mcp.dispose();
-        for (const e of engines.values()) void e.dispose();
+        void shutdownEngines();
       },
     },
   );
 
   // Start in the background: activation must not wait for a CLI to boot.
   void controller.activate().catch((err) => log.error(`Activation failed: ${err instanceof Error ? (err.stack ?? err.message) : String(err)}`));
+  activeEngines = engines;
+  shutdown = undefined;
   return { controller, view, engines, ledger };
 }
 
-export function deactivate(): void {
-  /* resources are released through context.subscriptions */
+let activeEngines: Map<EngineId, Engine> | undefined;
+let shutdown: Promise<void> | undefined;
+
+/** Stop every engine once; local engines save running replies to disk first. */
+function shutdownEngines(): Promise<void> {
+  const list = activeEngines;
+  shutdown ??= list ? Promise.all([...list.values()].map((e) => e.dispose().catch(() => undefined))).then(() => undefined) : Promise.resolve();
+  return shutdown;
+}
+
+/** VS Code waits for this promise (a few seconds) on shutdown: running replies are saved to disk. */
+export function deactivate(): Promise<void> {
+  return shutdownEngines();
 }
 
 function score(relative: string, q: string): number {

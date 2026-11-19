@@ -53,26 +53,26 @@ describe('attachments', () => {
 describe('LocalSessionStore', () => {
   it('persists sessions per engine and per workspace', async () => {
     const dir = mkdtempSync(path.join(os.tmpdir(), 'ochub-store-'));
-    const a = new LocalSessionStore(dir, 'direct', '/workspace/a');
+    const a = new LocalSessionStore(dir, 'direct', '/workspace/a', 0);
     const info = { id: 'ses_1', engine: 'direct' as const, title: 'T', createdAt: 1, updatedAt: 2 };
     await a.put({ info, messages: [{ id: 'm', sessionId: 'ses_1', role: 'user', createdAt: 1, parts: [] }], meta: { wire: [1] } });
     await a.put({ info: { ...info, id: 'ses_2', updatedAt: 9 }, messages: [], meta: {} });
 
-    const reopened = new LocalSessionStore(dir, 'direct', '/workspace/a');
+    const reopened = new LocalSessionStore(dir, 'direct', '/workspace/a', 0);
     expect((await reopened.list()).map((s) => s.id)).toEqual(['ses_2', 'ses_1']);
     expect((await reopened.get('ses_1'))!.meta).toEqual({ wire: [1] });
     // Other workspaces and other engines do not see them.
-    expect(await new LocalSessionStore(dir, 'direct', '/workspace/b').list()).toEqual([]);
-    expect(await new LocalSessionStore(dir, 'codex', '/workspace/a').list()).toEqual([]);
+    expect(await new LocalSessionStore(dir, 'direct', '/workspace/b', 0).list()).toEqual([]);
+    expect(await new LocalSessionStore(dir, 'codex', '/workspace/a', 0).list()).toEqual([]);
 
     await reopened.delete('ses_1');
-    expect((await new LocalSessionStore(dir, 'direct', '/workspace/a').list()).map((s) => s.id)).toEqual(['ses_2']);
+    expect((await new LocalSessionStore(dir, 'direct', '/workspace/a', 0).list()).map((s) => s.id)).toEqual(['ses_2']);
     rmSync(dir, { recursive: true, force: true });
   });
 
   it('serialises concurrent writes of one session', async () => {
     const dir = mkdtempSync(path.join(os.tmpdir(), 'ochub-store-'));
-    const store = new LocalSessionStore(dir, 'direct', '');
+    const store = new LocalSessionStore(dir, 'direct', '', 0);
     const session = { info: { id: 'ses_x', engine: 'direct' as const, title: 'v0', createdAt: 1, updatedAt: 1 }, messages: [], meta: {} };
     await store.put(session);
     const writes = [];
@@ -81,7 +81,7 @@ describe('LocalSessionStore', () => {
       writes.push(store.persist('ses_x'));
     }
     await Promise.all(writes);
-    expect((await new LocalSessionStore(dir, 'direct', '').get('ses_x'))!.info.title).toBe('v20');
+    expect((await new LocalSessionStore(dir, 'direct', '', 0).get('ses_x'))!.info.title).toBe('v20');
     rmSync(dir, { recursive: true, force: true });
   });
 });
@@ -121,5 +121,29 @@ describe('ids', () => {
     const ids = Array.from({ length: 2000 }, () => newId('msg'));
     expect(new Set(ids).size).toBe(2000);
     expect(ids.every((id) => /^msg_[0-9a-z]+$/.test(id))).toBe(true);
+  });
+});
+
+describe('folder-scoped state', () => {
+  it('remembers per folder in global storage, reads old workspace values, and clears with undefined', async () => {
+    const { folderScopedState } = await import('../../src/core/usageLedger');
+    const mk = () => {
+      const m = new Map<string, unknown>();
+      return { m, get: <T,>(k: string) => m.get(k) as T | undefined, update: (k: string, v: unknown) => void m.set(k, v) };
+    };
+    const global = mk();
+    const old = mk();
+    old.m.set('engine', 'codex');
+    const where: { folder?: string } = {};
+    const state = folderScopedState(global, old, () => where.folder);
+    expect(state.get('engine')).toBe('codex');
+    state.update('engine', 'claude-code');
+    expect(state.get('engine')).toBe('claude-code');
+    expect(global.m.get('folder:(no folder):engine')).toBe('claude-code');
+    where.folder = '/work/a';
+    state.update('session.direct', 'ses_1');
+    expect(state.get('session.direct')).toBe('ses_1');
+    state.update('session.direct', undefined);
+    expect(state.get('session.direct')).toBeUndefined();
   });
 });

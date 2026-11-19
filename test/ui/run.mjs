@@ -450,6 +450,42 @@ await test('sessions panel: search, switch, rename, delete, new', async () => {
   await t.page.close();
 });
 
+await test('sessions panel: every engine\'s saved sessions in one list', async () => {
+  const t = await open();
+  const now = Date.now();
+  const otherSessions = [
+    { id: 'cc_1', engine: 'claude-code', title: 'Fix the login bug', createdAt: now - 7200_000, updatedAt: now - 60_000 },
+    { id: 'cx_1', engine: 'codex', title: 'Write release notes', createdAt: now - 3 * 86400_000, updatedAt: now - 2 * 86400_000 },
+  ];
+  await t.host({ type: 'state', state: { ...conversation, otherSessions } });
+  await t.page.click('.session-btn');
+  await t.page.waitForSelector('.sheet .row.session');
+  assert.deepEqual(await t.posted('sessionsRefresh'), [{ type: 'sessionsRefresh' }]);
+  // Newest first, across engines, each labelled with its engine.
+  const rows = await t.page.$$eval('.row.session', (els) => els.map((e) => `${e.querySelector('.engine-tag')?.textContent}|${e.querySelector('.row-title').textContent}`));
+  assert.deepEqual(rows, ['Claude Code|Fix the login bug', 'opencode|Refactor the auth middleware', 'opencode|Why is the CI job flaky?', 'Codex (ChatGPT)|Write release notes', 'opencode|Write tests for the usage ledger']);
+  // Another engine's session cannot be renamed from here, but opens in its engine and can be deleted.
+  assert.equal(await t.page.$('.row.session:first-child button[title="Rename"]'), null);
+  await sleep(400);
+  await t.shot('24-sessions-all-engines-dark');
+  await t.clearPosted();
+  await t.page.click('.row.session:first-child .row-main');
+  assert.deepEqual(await t.posted('switchSession'), [{ type: 'switchSession', sessionId: 'cc_1', engine: 'claude-code' }]);
+  await t.page.click('.session-btn');
+  await t.page.waitForSelector('.segmented');
+  await t.page.hover('.row.session:nth-child(4)');
+  await t.page.click('.row.session:nth-child(4) button[title="Delete"]');
+  assert.deepEqual(await t.posted('deleteSession'), [{ type: 'deleteSession', sessionId: 'cx_1', engine: 'codex' }]);
+  // Only this engine's sessions.
+  await t.page.$$eval('.segmented button', (els) => els[1].click());
+  await t.page.waitForFunction(() => document.querySelectorAll('.row.session').length === 3);
+  assert.equal(await t.page.$('.row.session .engine-tag'), null);
+  await t.page.type('.sheet .search input', 'login');
+  await t.page.waitForFunction(() => document.querySelector('.empty-note')?.textContent === 'No session matches.');
+  assert.deepEqual(t.consoleErrors, []);
+  await t.page.close();
+});
+
 await test('engine, model and agent pickers', async () => {
   const t = await open();
   await t.host({ type: 'state', state: conversation });
@@ -502,7 +538,7 @@ await test('context meter, retry after a failed reply, and recent models', async
   assert.notEqual(await t.page.$eval('.context-meter', (e) => e.title), used);
   await t.shot('21-context-meter-dark');
   await t.clearPosted();
-  await t.page.click('.context-meter');
+  await t.page.$eval('.context-meter', (el) => el.click());
   assert.deepEqual(await t.posted('send'), [{ type: 'send', text: '/usage' }]);
 
   // Retry shows only when the host offers it, and never while a reply is running.

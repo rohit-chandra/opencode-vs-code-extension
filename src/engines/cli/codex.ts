@@ -214,7 +214,10 @@ export class CodexEngine extends LocalEngine {
         env,
         stdin: text,
         signal,
-        onEvent: (ev) => translator.handle(ev),
+        onEvent: (ev) => {
+          translator.handle(ev);
+          if (translator.threadId) session.meta.codexThreadId = translator.threadId;
+        },
         onText: (line) => this.ctx.log.debug(`[codex] ${line}`),
       });
       if (signal.aborted) return;

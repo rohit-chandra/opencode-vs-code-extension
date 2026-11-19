@@ -38,9 +38,13 @@ export function SessionsPanel({ s, onClose }: { s: ViewState; onClose: () => voi
   const [query, setQuery] = useState('');
   const [editing, setEditing] = useState<string>();
   const [draft, setDraft] = useState('');
-  const usage = useMemo(() => new Map((s.usage?.sessions ?? []).filter((u) => u.engine === s.engine).map((u) => [u.sessionId, u])), [s.usage, s.engine]);
+  const [scope, setScope] = useState<'all' | 'engine'>('all');
+  useEffect(() => send({ type: 'sessionsRefresh' }), []);
+  const usage = useMemo(() => new Map((s.usage?.sessions ?? []).map((u) => [`${u.engine}|${u.sessionId}`, u])), [s.usage]);
   const q = query.trim().toLowerCase();
-  const sessions = s.sessions.filter((x) => !q || x.title.toLowerCase().includes(q));
+  const all = scope === 'all' ? [...s.sessions, ...(s.otherSessions ?? [])].sort((a, b) => b.updatedAt - a.updatedAt) : s.sessions;
+  const sessions = all.filter((x) => !q || x.title.toLowerCase().includes(q) || (scope === 'all' && ENGINE_LABELS[x.engine].toLowerCase().includes(q)));
+  const otherCount = s.otherSessions?.length ?? 0;
   const committed = useRef(false);
   // Enter commits and unmounts the input, which then also fires blur: only send once.
   const commit = (id: string) => {
@@ -60,16 +64,25 @@ export function SessionsPanel({ s, onClose }: { s: ViewState; onClose: () => voi
         </button>
       }
     >
+      <div class="segmented" role="tablist" aria-label="Which sessions">
+        <button type="button" role="tab" aria-selected={scope === 'all'} class={scope === 'all' ? 'on' : ''} onClick={() => setScope('all')}>
+          All engines
+        </button>
+        <button type="button" role="tab" aria-selected={scope === 'engine'} class={scope === 'engine' ? 'on' : ''} onClick={() => setScope('engine')}>
+          {ENGINE_LABELS[s.engine]}
+        </button>
+      </div>
       <label class="search">
         <IconSearch size={13} />
-        <input type="text" placeholder={`Search ${ENGINE_LABELS[s.engine]} sessions`} value={query} onInput={(e) => setQuery(e.currentTarget.value)} />
+        <input type="text" placeholder={scope === 'all' ? 'Search sessions' : `Search ${ENGINE_LABELS[s.engine]} sessions`} value={query} onInput={(e) => setQuery(e.currentTarget.value)} />
       </label>
-      {sessions.length === 0 && <p class="empty-note">{s.sessions.length ? 'No session matches.' : 'No sessions yet. Send a message to start one.'}</p>}
+      {sessions.length === 0 && <p class="empty-note">{all.length ? 'No session matches.' : scope === 'engine' && otherCount ? `No ${ENGINE_LABELS[s.engine]} sessions yet. ${otherCount} from other engines under All engines.` : 'No sessions yet. Send a message to start one.'}</p>}
       <ul class="list">
         {sessions.map((x) => {
-          const u = usage.get(x.id);
+          const u = usage.get(`${x.engine}|${x.id}`);
+          const here = x.engine === s.engine;
           return (
-            <li key={x.id} class={`row session ${x.id === s.sessionId ? 'active' : ''}`}>
+            <li key={`${x.engine}|${x.id}`} class={`row session ${x.id === s.sessionId ? 'active' : ''}`}>
               {editing === x.id ? (
                 <input
                   class="rename"
@@ -90,23 +103,26 @@ export function SessionsPanel({ s, onClose }: { s: ViewState; onClose: () => voi
                   onBlur={() => commit(x.id)}
                 />
               ) : (
-                <button type="button" class="row-main" onClick={() => (send({ type: 'switchSession', sessionId: x.id }), onClose())}>
+                <button type="button" class="row-main" title={here ? undefined : `Opens in ${ENGINE_LABELS[x.engine]}`} onClick={() => (send(here ? { type: 'switchSession', sessionId: x.id } : { type: 'switchSession', sessionId: x.id, engine: x.engine }), onClose())}>
                   <span class="row-title">{x.title}</span>
                   <span class="row-sub">
+                    {scope === 'all' && <span class={`engine-tag ${here ? 'here' : ''}`}>{ENGINE_LABELS[x.engine]}</span>}
                     {relativeTime(x.updatedAt)}
-                    {u ? `, ${compact(tokensAll(u.usage))} tokens` : ''}
+                    {u ? `, ${compact(tokensAll(u.usage))} tokens${u.usage.cost ? `, ${money(u.usage.cost)}` : ''}` : ''}
                   </span>
                 </button>
               )}
               <span class="row-actions">
-                <button type="button" class="icon-btn" title="Rename" aria-label={`Rename ${x.title}`} onClick={() => {
-                    committed.current = false;
-                    setDraft(x.title);
-                    setEditing(x.id);
-                  }}>
-                  <IconPencil size={13} />
-                </button>
-                <button type="button" class="icon-btn" title="Delete" aria-label={`Delete ${x.title}`} onClick={() => send({ type: 'deleteSession', sessionId: x.id })}>
+                {here && (
+                  <button type="button" class="icon-btn" title="Rename" aria-label={`Rename ${x.title}`} onClick={() => {
+                      committed.current = false;
+                      setDraft(x.title);
+                      setEditing(x.id);
+                    }}>
+                    <IconPencil size={13} />
+                  </button>
+                )}
+                <button type="button" class="icon-btn" title="Delete" aria-label={`Delete ${x.title}`} onClick={() => send(here ? { type: 'deleteSession', sessionId: x.id } : { type: 'deleteSession', sessionId: x.id, engine: x.engine })}>
                   <IconTrash size={13} />
                 </button>
               </span>

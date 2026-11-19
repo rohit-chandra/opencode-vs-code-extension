@@ -16,6 +16,7 @@ const EMPTY: ViewState = {
   engines: [],
   capabilities: { agents: false, fork: false, share: false, undo: false, compact: false, images: false, mcpToggle: false, permissions: false, providerAuth: false, remoteSessions: false },
   sessions: [],
+  otherSessions: [],
   sessionId: undefined,
   messages: [],
   activity: 'idle',

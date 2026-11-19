@@ -83,6 +83,7 @@ export class ChatController {
       engines: [...engines.values()].map((e) => e.status()),
       capabilities: engines.get(engine)?.capabilities ?? EMPTY_CAPS,
       sessions: [],
+      otherSessions: [],
       sessionId: undefined,
       messages: [],
       activity: 'idle',
@@ -140,7 +141,7 @@ export class ChatController {
       this.set({ loading: false, sessions: [], sessionId: undefined, messages: [], providers: [], agents: [], mcp: [], commands: mergeCommands([]), model: undefined, agent: undefined, auth: undefined });
       return;
     }
-    await Promise.all([this.refreshCatalog(), this.refreshMcp(), this.refreshSessions(), this.refreshAuth()]);
+    await Promise.all([this.refreshCatalog(), this.refreshMcp(), this.refreshSessions(), this.refreshAuth(), this.refreshOtherSessions()]);
     if (run !== this.activation) return;
     const last = this.host.state.get<string>(`session.${engine.id}`);
     if (last && this.state.sessions.some((s) => s.id === last)) await this.openSession(last);
@@ -256,6 +257,33 @@ export class ChatController {
     if (engine === this.engine) this.set({ sessions });
   }
 
+  /**
+   * Sessions of the other engines, for the one history list. Engines that keep sessions in
+   * the extension's storage are read from disk without starting; opencode only while it runs.
+   */
+  private async refreshOtherSessions(): Promise<void> {
+    if (!this.host.workspaceTrusted()) return;
+    const active = this.state.engine;
+    const lists = await Promise.all(
+      [...this.engines.values()]
+        .filter((e) => e.id !== active && (!e.capabilities.remoteSessions || e.status().state === 'ready'))
+        .map((e) => e.listSessions().catch(() => [] as SessionInfo[])),
+    );
+    if (active !== this.state.engine) return;
+    this.set({ otherSessions: lists.flat().filter((s) => !s.parentId).sort((a, b) => b.updatedAt - a.updatedAt).slice(0, 300) });
+  }
+
+  /** Open a session of any engine: switch to its engine first when needed. */
+  async openAnySession(sessionId: string, engine?: EngineId): Promise<void> {
+    if (engine && engine !== this.state.engine && this.engines.has(engine)) {
+      await this.host.state.update(`session.${engine}`, sessionId);
+      await this.setEngine(engine);
+      if (this.state.sessionId !== sessionId) await this.openSession(sessionId);
+      return;
+    }
+    await this.openSession(sessionId);
+  }
+
   /** Ask the active engine's CLI whether it is signed in (Claude Code, Codex). */
   private async refreshAuth(): Promise<AuthStatus | undefined> {
     const engine = this.engine;
@@ -299,6 +327,7 @@ export class ChatController {
       return;
     }
     if (event.type === 'session.updated') this.ledger.setSessionTitle(engineId, event.session.id, event.session.title);
+    if ((event.type === 'session.updated' || event.type === 'session.deleted') && engineId !== this.state.engine) this.debounce('otherSessions', 500, () => void this.refreshOtherSessions());
     // Auto mode: approve right away, for any engine and session (engines that ask in-process do this themselves).
     if (event.type === 'permission.asked' && this.state.approvals === 'auto') {
       const engine = this.engines.get(engineId);
@@ -425,6 +454,14 @@ export class ChatController {
     await this.guard('Could not delete the session', () => this.engine.deleteSession(sessionId));
     await this.refreshSessions();
     if (this.state.sessionId === sessionId) await this.newSession();
+  }
+
+  private async deleteOtherSession(engineId: EngineId, sessionId: string): Promise<void> {
+    const engine = this.engines.get(engineId);
+    const s = this.state.otherSessions.find((x) => x.id === sessionId);
+    if (!engine || !(await this.host.confirm(`Delete session "${s?.title ?? sessionId}"? This cannot be undone.`, 'Delete'))) return;
+    await this.guard('Could not delete the session', () => engine.deleteSession(sessionId));
+    await this.refreshOtherSessions();
   }
 
   async pickSession(): Promise<void> {
@@ -1068,9 +1105,12 @@ export class ChatController {
       case 'newSession':
         return this.newSession();
       case 'switchSession':
-        return this.openSession(msg.sessionId);
+        return this.openAnySession(msg.sessionId, msg.engine);
       case 'deleteSession':
+        if (msg.engine && msg.engine !== this.state.engine) return this.deleteOtherSession(msg.engine, msg.sessionId);
         return this.deleteSession(msg.sessionId);
+      case 'sessionsRefresh':
+        return this.refreshOtherSessions();
       case 'renameSession':
         await this.guard('Could not rename', () => this.engine.renameSession(msg.sessionId, msg.title));
         return this.refreshSessions();

@@ -29,6 +29,8 @@ export interface ViewState {
   engines: EngineStatus[];
   capabilities: EngineCapabilities;
   sessions: SessionInfo[];
+  /** Saved sessions of the other engines in this workspace, so the history shows everything. */
+  otherSessions: SessionInfo[];
   sessionId: string | undefined;
   messages: ChatMessage[];
   activity: SessionActivity;
@@ -80,8 +82,11 @@ export type WebviewToHost =
   | { type: 'abort' }
   | { type: 'retry' }
   | { type: 'newSession' }
-  | { type: 'switchSession'; sessionId: string }
-  | { type: 'deleteSession'; sessionId: string }
+  /** `engine`: a session of another engine; the chat switches to that engine first. */
+  | { type: 'switchSession'; sessionId: string; engine?: EngineId }
+  | { type: 'deleteSession'; sessionId: string; engine?: EngineId }
+  /** The history panel opened: reload the other engines' sessions. */
+  | { type: 'sessionsRefresh' }
   | { type: 'renameSession'; sessionId: string; title: string }
   | { type: 'setEngine'; engine: EngineId }
   | { type: 'setModel'; model: ModelRef }

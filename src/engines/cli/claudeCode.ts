@@ -260,7 +260,14 @@ export class ClaudeCodeEngine extends LocalEngine {
         env,
         stdin: (await userLine(input)) + '\n',
         signal,
-        onEvent: (ev) => translator.handle(ev),
+        onEvent: (ev) => {
+          translator.handle(ev);
+          // Keep the CLI's session id from the first event, so --resume works even if VS Code closes mid-reply.
+          if (translator.init.sessionId && session.meta.claudeSessionId !== translator.init.sessionId) {
+            session.meta.claudeSessionId = translator.init.sessionId;
+            delete session.meta.forkPending;
+          }
+        },
         onText: (line) => this.ctx.log.debug(`[claude] ${line}`),
       });
       if (signal.aborted) return;

@@ -1706,3 +1706,40 @@ kbd {
     flex: 0 1 auto;
   }
 }
+
+/* Sessions panel: all engines / this engine */
+.segmented {
+  display: flex;
+  gap: 2px;
+  padding: 2px;
+  margin-bottom: 8px;
+  border: 1px solid var(--oh-border);
+  border-radius: var(--oh-radius);
+}
+.segmented > button {
+  flex: 1;
+  padding: 3px 8px;
+  border-radius: 4px;
+  color: var(--oh-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.segmented > button.on {
+  background: var(--vscode-list-activeSelectionBackground, var(--oh-hover));
+  color: var(--vscode-list-activeSelectionForeground, var(--vscode-foreground));
+}
+.segmented > button:hover:not(.on) {
+  background: var(--oh-hover);
+}
+.engine-tag {
+  display: inline-block;
+  margin-right: 6px;
+  padding: 0 5px;
+  border: 1px solid var(--oh-border);
+  border-radius: 3px;
+  font-size: 0.85em;
+}
+.engine-tag.here {
+  border-color: var(--oh-accent);
+}

@@ -205,6 +205,25 @@ describe.skipIf(!bin)('ChatController with the real opencode engine', () => {
     expect(host.view!.approvals).toBe('ask');
   });
 
+  it('one history for every engine: other engines\' saved sessions are listed and open in their engine', async () => {
+    // A Direct BYOK session saved earlier, while opencode is the active engine.
+    const direct = engines.get('direct')!;
+    const saved = await direct.createSession('Saved with BYOK');
+    await controller.handleMessage({ type: 'sessionsRefresh' });
+    const v = await host.until((s) => s.otherSessions.some((x) => x.id === saved.id), 10_000, 'other sessions');
+    expect(v.otherSessions.find((x) => x.id === saved.id)).toMatchObject({ engine: 'direct', title: 'Saved with BYOK' });
+    expect(v.sessions.every((x) => x.engine === 'opencode')).toBe(true);
+
+    await controller.handleMessage({ type: 'switchSession', sessionId: saved.id, engine: 'direct' });
+    const opened = await host.until((s) => s.engine === 'direct' && s.sessionId === saved.id && !s.loading, 30_000, 'switch to the BYOK session');
+    expect(opened.otherSessions.some((x) => x.engine === 'opencode')).toBe(true);
+    await controller.handleMessage({ type: 'setEngine', engine: 'opencode' });
+    await host.until((s) => s.engine === 'opencode' && !s.loading, 30_000);
+    // Leave no BYOK session behind for the tests that follow.
+    await direct.deleteSession(saved.id);
+    await host.state.update('session.direct', undefined);
+  });
+
   it('switches sessions, restores history and keeps usage per session', async () => {
     const first = host.view!.sessionId!;
     await controller.handleMessage({ type: 'newSession' });

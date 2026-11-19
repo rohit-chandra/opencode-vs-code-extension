@@ -205,6 +205,25 @@ describe('Direct BYOK engine (mock OpenAI-compatible + Anthropic servers)', () =
     }
   });
 
+  it('keeps a conversation when VS Code closes in the middle of a reply', async () => {
+    const first = new DirectEngine(ctx, mcp);
+    expect((await first.start()).state).toBe('ready');
+    const rec = record(first);
+    const session = await first.createSession();
+    await first.sendPrompt(session.id, { text: 'a long answer please [[slow]]', attachments: [], model: { providerId: 'mockoai', modelId: 'mock-small' } });
+    await rec.waitFor('part.delta', (e) => e.sessionId === session.id);
+    await first.dispose(); // what deactivate() does on shutdown
+
+    const second = new DirectEngine(ctx, mcp);
+    expect((await second.start()).state).toBe('ready');
+    expect((await second.listSessions()).map((s) => s.id)).toContain(session.id);
+    const messages = await second.getMessages(session.id);
+    expect(messages.map((m) => m.role)).toEqual(['user', 'assistant']);
+    expect(messages[0].parts[0]).toMatchObject({ type: 'text', text: 'a long answer please [[slow]]' });
+    expect(messages[1].completedAt).toBeDefined();
+    await second.dispose();
+  });
+
   it('toggling an MCP server off removes its tools from requests', async () => {
     await engine.setMcpEnabled('mockmcp', false);
     expect((await engine.listMcp())[0]).toMatchObject({ status: 'disabled', enabled: false });

@@ -243,3 +243,21 @@ export function estimateCost(usage: Omit<TokenUsage, 'cost'>, pricing?: { input:
     (usage.cacheWrite * (pricing.cacheWrite ?? pricing.input)) / m
   );
 }
+
+/**
+ * Per-workspace values kept in VS Code's global (profile) storage, keyed by folder. Unlike
+ * `workspaceState`, this survives restarts of a window with no folder open. Older values in
+ * `fallback` (workspaceState) are still read.
+ */
+export function folderScopedState(global: KeyValueStore, fallback: KeyValueStore | undefined, folder: () => string | undefined): KeyValueStore {
+  const key = (k: string) => `folder:${folder() ?? '(no folder)'}:${k}`;
+  return {
+    get: <T>(k: string): T | undefined => {
+      const v = global.get<T | null>(key(k));
+      // `null` marks a value that was cleared on purpose.
+      if (v === null) return undefined;
+      return v ?? fallback?.get<T>(k);
+    },
+    update: (k: string, value: unknown) => global.update(key(k), value === undefined ? null : value),
+  };
+}

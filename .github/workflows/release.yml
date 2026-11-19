@@ -11,6 +11,12 @@ on:
 permissions:
   contents: write
 
+# Publishing from the Releases page can fire both the tag push and the release event.
+# Run them one after the other; the second only re-uploads the same files.
+concurrency:
+  group: release-${{ github.ref_name }}
+  cancel-in-progress: false
+
 jobs:
   release:
     runs-on: ubuntu-latest

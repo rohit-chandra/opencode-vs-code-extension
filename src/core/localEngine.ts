@@ -6,7 +6,7 @@ import { newId } from './ids';
 import { LocalSessionStore } from './localSessions';
 import type { StoredSession } from './localSessions';
 import { truncate } from './slashCommands';
-import { addUsage, emptyUsage } from '../shared/types';
+import { addUsage, approvalMode, emptyUsage } from '../shared/types';
 import type {
   AgentInfo,
   ChatMessage,
@@ -336,6 +336,11 @@ export abstract class LocalEngine implements Engine {
 
   /** Ask the user before running a tool. Resolves to 'reject' when the turn is aborted. */
   protected askPermission(sessionId: string, request: Omit<PermissionRequest, 'id' | 'sessionId'>, signal: AbortSignal): Promise<PermissionReply> {
+    // Auto mode: proceed without asking, like the Claude app's auto mode.
+    if (approvalMode(this.ctx.config<string>('approvals', 'ask')) === 'auto') {
+      this.ctx.log.info(`Auto-approved: ${request.title}`);
+      return Promise.resolve(signal.aborted ? 'reject' : 'once');
+    }
     const id = newId('per');
     return new Promise<PermissionReply>((resolve) => {
       const done = (reply: PermissionReply) => {

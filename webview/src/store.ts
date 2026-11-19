@@ -37,6 +37,7 @@ const EMPTY: ViewState = {
   canRetry: false,
   recentModels: [],
   auth: undefined,
+  approvals: 'ask',
   panel: { name: 'none', nonce: 0 },
   notice: undefined,
   loading: true,

@@ -115,8 +115,16 @@ If `opencode` is installed somewhere VS Code cannot find, set `opencodeHub.openc
 <summary><b>Direct BYOK</b>: your own API key, or a local model</summary>
 
 1. Type `/engine` in the chat and choose **Direct BYOK**.
-2. Type `/providers`, choose a provider (OpenAI, Anthropic, OpenRouter, Google Gemini, Groq, Mistral, DeepSeek, xAI, Together AI, Ollama or LM Studio) and paste your API key. Keys go to VS Code Secret Storage, not to settings files.
+2. Type `/providers`, choose a provider (OpenAI, Anthropic, OpenRouter, Hugging Face, Google Gemini, Groq, Mistral, DeepSeek, xAI, Together AI, Ollama or LM Studio) and paste your API key. Keys go to VS Code Secret Storage, not to settings files.
 3. Choose a model with the model button.
+
+**Hugging Face** has three entries:
+
+- **Hugging Face**: open models from the Hub (Qwen, Llama, DeepSeek, gpt-oss, Kimi and more) through [Inference Providers](https://huggingface.co/docs/inference-providers), with one Hugging Face token. Create a fine-grained token with *Make calls to Inference Providers* at huggingface.co/settings/tokens. `HF_TOKEN` or `HUGGINGFACE_HUB_TOKEN` in your environment also works. Model ids look like `Qwen/Qwen3-Coder-480B-A35B-Instruct`; add `:fastest`, `:cheapest` or a provider name (`:together`) to choose where it runs.
+- **Hugging Face Inference Endpoint**: your own dedicated endpoint. You paste its URL and your token.
+- **Hugging Face TGI (local)**: Text Generation Inference on `localhost:8080`, no key.
+
+With the **opencode** engine, Hugging Face is also in opencode's own provider list (`/providers`, then *Connect an opencode provider*).
 
 For a local server such as Ollama or LM Studio, start the server first; no key is needed. Any other OpenAI-compatible endpoint can be added under `opencodeHub.providers` (see [Settings](#settings)).
 
@@ -129,6 +137,8 @@ For a local server such as Ollama or LM Studio, start the server first; no key i
 2. In the chat: `/engine`, then **Claude Code**.
 3. Click **Sign in with Claude**. A terminal runs `claude auth login --claudeai` and your browser opens; sign in with your Claude account. The chat notices when you are done.
 
+The model picker lists the models your Claude plan includes, as Claude Code reports them for your account (for example Fable 5.2, Opus 5.5, Sonnet 5.5, Haiku 5.5). Extra model ids can be added under `opencodeHub.claudeCode.models`.
+
 Your Claude Pro or Max plan is used, not per-token API billing. In this mode the extension also hides `ANTHROPIC_API_KEY` from the CLI, so a key set in your shell for other tools cannot quietly take over. To use an API key instead, click **Use an API key instead** (or `/login`); the key is kept in VS Code Secret Storage. `/login` switches back at any time.
 
 </details>
@@ -139,6 +149,8 @@ Your Claude Pro or Max plan is used, not per-token API billing. In this mode the
 1. `npm install -g @openai/codex`
 2. In the chat: `/engine`, then **Codex (ChatGPT)**.
 3. Click **Sign in with ChatGPT**. A terminal runs `codex login` and your browser opens; sign in with your ChatGPT account. On a remote machine (SSH, WSL, a container) use **Use a device code** instead.
+
+The model picker lists the models of your ChatGPT plan, as `codex app-server` reports them, with *Default* (your `config.toml` model or Codex's recommended one) first.
 
 Your ChatGPT Plus or Pro plan is used, not per-token API billing; `CODEX_API_KEY` is hidden from the CLI in this mode. If Codex was signed in with an API key earlier, the chat says so and offers the ChatGPT sign-in. **Use an API key instead** (or `/login`) switches to a key kept in VS Code Secret Storage.
 
@@ -233,6 +245,22 @@ Type `/` to see every command, filtered as you type. Commands defined by the eng
 - Paste an image from the clipboard.
 - Select code and press `Ctrl+Alt+L`, or right-click → **Add Selection to Chat**.
 
+### Ask or Auto
+
+The shield button under the message box chooses whether the agent asks before it acts.
+
+- **Ask** (default): commands, file edits and tool calls wait for **Allow once**, **Always allow** or **Deny**.
+- **Auto**: the agent proceeds without asking, like the Claude app's auto mode. The button turns into a yellow **Auto** so you can see it.
+
+Switch with the button, `/auto` and `/ask`, **Switch to Auto** on any approval card, or *OpenCode Hub: Toggle Auto Mode*. The choice is a user setting (`opencodeHub.approvals`), so a workspace's settings cannot turn Auto on.
+
+| Engine | What Ask does | What Auto does |
+|---|---|---|
+| opencode | Shows opencode's permission requests | Approves them as they arrive |
+| Claude Code | Claude Code asks the chat before each tool its permission mode does not already allow (`acceptEdits` allows file edits) | Approves every tool call |
+| Direct BYOK, Copilot | Asks before each MCP tool call | Runs MCP tools without asking |
+| Codex | Codex never stops to ask; `opencodeHub.codex.sandbox` limits what it can do | Same |
+
 ### MCP servers
 
 The plug icon shows how many MCP servers are connected. Open it to see each server's status and switch servers on or off.
@@ -259,8 +287,9 @@ The plug icon shows how many MCP servers are connected. Open it to see each serv
 Every reply records input, output, reasoning and cached tokens, plus cost when the engine reports it.
 
 - Under each reply: tokens in and out for that reply.
-- Under the message box and in the status bar: the running total for the session.
-- `/usage`: this session, all sessions, a breakdown by provider and model across every engine, tokens per day and recent sessions.
+- Next to the model under the message box: the tokens used by the **open session** so far (with its cost when known). Hover for tokens in and out and the number of replies; click to open the usage panel. The status bar shows the same total.
+- `/usage`: this session with a **per-reply breakdown** (model, tokens in and out, cost of each reply), all sessions, a breakdown by provider and model across every engine, tokens per day and recent sessions.
+- The sessions list shows each session's total.
 
 - In the corner of the message box: a ring that fills as the conversation approaches the model's context window. It turns into a warning with a percentage at 75% and again at 90%, and its tooltip gives the numbers. The figure comes from the last reply, so treat it as an estimate.
 
@@ -397,7 +426,7 @@ A few details that matter:
 
 - **Streaming sends differences, not documents.** The host and the webview run the same reducer over the same events, so a long reply is never re-sent as a whole.
 - **Usage is counted once.** The ledger is keyed by message id. Reloading history or receiving the same update twice changes nothing.
-- **Approvals travel the same path.** When opencode asks for a permission, or an MCP tool is about to run in Direct BYOK or Copilot, the engine emits a request, the chat shows it, and your answer goes back to the engine.
+- **Approvals travel the same path.** When opencode asks for a permission, Claude Code calls its permission-prompt tool, or an MCP tool is about to run in Direct BYOK or Copilot, the engine emits a request, the chat shows it, and your answer goes back to the engine. In Auto mode the answer is "allow" straight away.
 - **MCP toggles go to whoever owns the servers.** For opencode that is the running opencode instance; for Direct BYOK and Copilot it is the extension's own MCP client; Claude Code and Codex get the enabled set as start-up arguments.
 
 More detail, including how to add an engine, is in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
@@ -421,6 +450,7 @@ Measured with the UI test suite (headless Chrome, software rendering): a reply s
 | `opencodeHub.opencode.path` | | Path to `opencode` if it is not on `PATH` |
 | `opencodeHub.opencode.serverUrl` | | Attach to a running `opencode serve` instead of starting one |
 | `opencodeHub.opencode.serverPassword` | | Password of that server |
+| `opencodeHub.approvals` | `ask` | `ask` before the agent acts, or `auto` to proceed without asking (user setting only) |
 | `opencodeHub.providers` | `[]` | Direct BYOK providers (no keys here) |
 | `opencodeHub.mcp.servers` | `{}` | MCP servers for Direct BYOK and Copilot |
 | `opencodeHub.claudeCode.auth` | `subscription` | `subscription` (your Claude account) or `apiKey` (a key in Secret Storage) |
@@ -449,11 +479,11 @@ A custom provider looks like this:
 - Your prompts and attachments go only to the engine and model you selected. The extension has no telemetry and makes no other network requests.
 - Model output is sanitized before it is shown. The chat view loads no remote content.
 - In an untrusted workspace no engine is started and chat is off, because engines run executables, load project configuration (MCP servers, plugins) and can run tools. Engine settings stored in the workspace (CLI paths, providers, MCP servers) are ignored there.
-- Tool permissions: opencode permission requests and MCP tool calls in Direct BYOK and Copilot are shown for approval. Claude Code and Codex run non-interactively, so what they may do is set by `claudeCode.permissionMode` and `codex.sandbox`.
+- Tool permissions: in Ask mode, opencode permission requests, Claude Code tool calls and MCP tool calls in Direct BYOK and Copilot are shown for approval. Claude Code's requests come through a small MCP server the extension writes to its storage folder and gives the CLI with `--permission-prompt-tool`; it talks only to `127.0.0.1` with a random token per turn. Codex runs non-interactively, so what it may do is set by `codex.sandbox`. In Auto mode everything is approved without asking.
 
 ## Limits worth knowing
 
-- Claude Code and Codex cannot ask for approval mid-run in this version; choose their permission mode and sandbox in settings.
+- Codex cannot ask for approval mid-run; choose its sandbox in settings.
 - The Direct BYOK and Copilot engines are chat with MCP tools. They do not edit files on their own; use opencode, Claude Code or Codex for agentic coding.
 - Direct BYOK does not trim long conversations. Start a new session when a chat gets close to the model's context window.
 - Sharing, undo and compaction are available where the engine has them (opencode has all three).

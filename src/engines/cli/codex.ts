@@ -5,7 +5,8 @@ import { EngineError } from '../../core/engine';
 import { LocalEngine } from '../../core/localEngine';
 import type { Turn } from '../../core/localEngine';
 import { findExecutable, runCapture } from '../../core/process';
-import type { AuthMode, AuthStatus, EngineCapabilities, McpServerInfo, ModelRef, ProviderInfo } from '../../shared/types';
+import type { AuthMode, AuthStatus, EngineCapabilities, McpServerInfo, ModelInfo, ModelRef, ProviderInfo } from '../../shared/types';
+import { codexModels } from './modelDiscovery';
 import { apiKeySecret, authMode, codexEnv, parseCodexLoginStatus, shellExe } from './auth';
 import { CodexStreamTranslator } from './codexStream';
 import { StateFile, imageBase64, promptForAgent, runJsonl } from './common';
@@ -35,6 +36,8 @@ export class CodexEngine extends LocalEngine {
   };
 
   private exe: string | undefined;
+  private version = '0';
+  private modelCache: { at: number; mode: string; models: ModelInfo[]; defaultName?: string } | undefined;
   private stateFile: StateFile<CodexState>;
 
   constructor(ctx: EngineContext) {
@@ -74,25 +77,64 @@ export class CodexEngine extends LocalEngine {
   };
 
   protected async checkAvailability(): Promise<{ ok: boolean; detail?: string; version?: string }> {
+    this.modelCache = undefined;
     this.exe = await findExecutable('codex', this.ctx.config<string>('codex.path', ''), this.env());
     if (!this.exe) {
       return { ok: false, detail: 'Codex CLI not found. Install it (npm i -g @openai/codex) or set "opencodeHub.codex.path", then sign in with your ChatGPT account.' };
     }
     const v = await runCapture(this.exe, ['--version'], { env: this.env(), timeoutMs: 15_000 });
-    return { ok: true, version: v.stdout.trim().split(/\s+/).pop() || undefined };
+    const version = v.stdout.trim().split(/\s+/).pop() || undefined;
+    this.version = version ?? '0';
+    return { ok: true, version };
+  }
+
+  /** Forget the cached model list (after signing in, or switching between account and API key). */
+  invalidateModels(): void {
+    this.modelCache = undefined;
+  }
+
+  /** The models the signed-in account (ChatGPT plan or API key) can use, from `codex app-server`. */
+  private async accountModels(): Promise<{ models: ModelInfo[]; defaultName?: string }> {
+    const mode = this.account.mode();
+    const cached = this.modelCache;
+    if (cached && cached.mode === mode && Date.now() - cached.at < (cached.models.length ? 10 * 60_000 : 30_000)) return cached;
+    const models: ModelInfo[] = [];
+    let defaultName: string | undefined;
+    if (this.exe) {
+      const env = await this.runEnv().catch(() => undefined);
+      const list = env ? await codexModels(this.exe, env, this.ctx.cwd(), this.version) : undefined;
+      for (const m of list ?? []) {
+        const id = m.model ?? m.id;
+        if (!id || m.hidden || models.some((x) => x.modelId === id)) continue;
+        models.push({ providerId: 'codex', modelId: id, name: m.displayName ?? id, description: m.description, supportsImages: !m.inputModalities || m.inputModalities.includes('image'), supportsTools: true });
+        if (m.isDefault) defaultName = m.displayName ?? id;
+      }
+      if (!list) this.ctx.log.warn('Codex did not report its models; set extra ones under "opencodeHub.codex.models".');
+    }
+    this.modelCache = { at: Date.now(), mode, models, defaultName };
+    return this.modelCache;
+  }
+
+  /** `model = "…"` from config.toml, which Codex uses when no model is given. */
+  private async configuredModel(): Promise<string | undefined> {
+    const env = this.env();
+    const home = env.CODEX_HOME || path.join(env.HOME ?? env.USERPROFILE ?? '', '.codex');
+    const toml = await fs.readFile(path.join(home, 'config.toml'), 'utf8').catch(() => '');
+    // Only the top-level key: stop at the first [table].
+    const top = toml.split(/^\s*\[/m)[0];
+    return /^\s*model\s*=\s*["']([^"']+)["']/m.exec(top)?.[1];
   }
 
   async listProviders(): Promise<ProviderInfo[]> {
     const extra = this.ctx.config<string[]>('codex.models', []);
-    const ids = ['default', ...new Set(Array.isArray(extra) ? extra : [])];
-    return [
-      {
-        id: 'codex',
-        name: 'Codex',
-        connected: true,
-        models: ids.map((id) => ({ providerId: 'codex', modelId: id, name: id === 'default' ? 'Default (from ~/.codex/config.toml)' : id, supportsImages: true, supportsTools: true })),
-      },
-    ];
+    const [{ models: found, defaultName }, configured] = await Promise.all([this.accountModels(), this.configuredModel()]);
+    const configuredName = configured ? found.find((m) => m.modelId === configured)?.name ?? configured : undefined;
+    const current = configuredName ?? defaultName;
+    const models: ModelInfo[] = [{ providerId: 'codex', modelId: 'default', name: current ? `Default (${current})` : 'Default (from ~/.codex/config.toml)', description: configured ? 'The model set in ~/.codex/config.toml' : 'The recommended model for your plan', supportsImages: true, supportsTools: true }, ...found];
+    for (const id of Array.isArray(extra) ? extra : []) {
+      if (typeof id === 'string' && !models.some((m) => m.modelId === id)) models.push({ providerId: 'codex', modelId: id, name: id, supportsImages: true, supportsTools: true });
+    }
+    return [{ id: 'codex', name: 'Codex', connected: true, models }];
   }
 
   override async defaultModel(): Promise<ModelRef | undefined> {

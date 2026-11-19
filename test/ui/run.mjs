@@ -134,7 +134,7 @@ await test('conversation: markdown, code, tool cards, reasoning, files and per-m
   assert.ok(await t.page.$('.code .hljs-keyword'), 'code is syntax highlighted');
   assert.equal(await t.text('.code-lang'), 'ts');
   assert.match(await t.text('.msg.assistant .meta'), /claude-sonnet-5-5.*23k in.*852 out.*\$0\.04/s);
-  assert.equal(await t.text('.usage-btn .usage-count'), '24k');
+  assert.match(await t.text('.pill.session-tokens'), /^24k · \$0\.04$/);
   assert.match(await t.page.$eval('.usage-btn', (el) => el.title), /23,440 tokens in, 852 out, \$0\.04/);
   assert.ok(await t.page.$('.md table'), 'tables render');
 
@@ -341,7 +341,7 @@ await test('permission and question prompts', async () => {
   await t.page.click('.request .btn.primary');
   assert.deepEqual(await t.posted('permissionReply'), [{ type: 'permissionReply', requestId: 'per_1', reply: 'once' }]);
   const buttons = await t.page.$$eval('.request:first-child .btn', (els) => els.map((e) => e.textContent.trim()));
-  assert.deepEqual(buttons, ['Allow once', 'Always allow', 'Deny']);
+  assert.deepEqual(buttons, ['Allow once', 'Always allow', 'Deny', 'Switch to Auto']);
   // The question needs an option before it can be sent.
   assert.equal(await t.page.$eval('.request:last-child .btn.primary', (el) => el.disabled), true);
   await t.page.click('.option');
@@ -750,6 +750,56 @@ await test('Claude Code and Codex ask to sign in with the account first, API key
   await t.page.click('.auth-bar .btn.primary');
   assert.deepEqual(await t.posted('useApiKey'), [{ type: 'useApiKey' }]);
   await t.shot('21-api-key-bar-dark');
+  assert.deepEqual(t.consoleErrors, []);
+  await t.page.close();
+});
+
+await test('Ask / Auto approvals, and tokens for the open session', async () => {
+  const t = await open('dark', 400, 900);
+  const u = (input, output, cost) => ({ input, output, reasoning: 0, cacheRead: 0, cacheWrite: 0, cost });
+  const extra = [
+    { id: 'm3', sessionId: 'ses_1', role: 'user', createdAt: Date.now() - 30_000, parts: [{ id: 'u3', type: 'text', text: 'And the tests?' }] },
+    { id: 'm4', sessionId: 'ses_1', role: 'assistant', createdAt: Date.now() - 29_000, completedAt: Date.now() - 20_000, model: { providerId: 'anthropic', modelId: 'claude-haiku-5-5' }, usage: u(2100, 300, 0.002), parts: [{ id: 'a4', type: 'text', text: 'Added two tests.' }] },
+  ];
+  const state = { ...conversation, messages: [...conversation.messages, ...extra], approvals: 'ask' };
+  await t.host({ type: 'state', state });
+  await t.page.waitForSelector('.pill.approvals');
+  assert.equal(await t.text('.pill.approvals'), 'Ask');
+  // The open session's tokens sit in the composer, always in view.
+  assert.match(await t.text('.pill.session-tokens'), /^24k · \$0\.04$/);
+  assert.match(await t.page.$eval('.pill.session-tokens', (el) => el.title), /This session: 23,440 tokens in, 852 out, \$0\.04 over 1 reply/);
+  await t.clearPosted();
+  await t.page.click('.pill.session-tokens');
+  assert.deepEqual(await t.posted('send'), [{ type: 'send', text: '/usage' }]);
+
+  // Ask / Auto menu.
+  await t.page.click('.pill.approvals');
+  await t.page.waitForSelector('.approvals-menu');
+  assert.deepEqual(await t.page.$$eval('.approvals-menu .menu-label', (els) => els.map((e) => e.textContent)), ['Ask before acting', 'Auto']);
+  await t.shot('22-approvals-menu-dark');
+  await t.clearPosted();
+  await t.page.$$eval('.approvals-menu .menu-item', (els) => els[1].click());
+  assert.deepEqual(await t.posted('setApprovals'), [{ type: 'setApprovals', mode: 'auto' }]);
+  await t.host({ type: 'patch', patch: { approvals: 'auto' } });
+  assert.equal(await t.text('.pill.approvals'), 'Auto');
+  assert.ok(await t.page.$('.pill.approvals.auto'));
+
+  // A permission prompt offers to switch to Auto.
+  await t.host({ type: 'patch', patch: { approvals: 'ask', permissions: [{ id: 'per_1', sessionId: 'ses_1', kind: 'bash', title: 'Run a command: run the tests', detail: 'npm test' }] } });
+  await t.page.waitForSelector('.request .auto-switch');
+  await t.clearPosted();
+  await t.page.click('.request .auto-switch');
+  assert.deepEqual(await t.posted('setApprovals'), [{ type: 'setApprovals', mode: 'auto' }]);
+  await t.host({ type: 'patch', patch: { permissions: [] } });
+
+  // The usage panel lists every reply of the session.
+  await t.host({ type: 'patch', patch: { sessionUsage: { ...conversation.sessionUsage, messages: 2 } } });
+  await t.page.click('.usage-btn');
+  await t.page.waitForSelector('.reply-rows');
+  assert.match(await t.text('.usage-section h3'), /This session: Refactor the auth middleware/);
+  const rows = await t.page.$$eval('.usage-table.replies tbody tr', (els) => els.map((e) => [...e.children].map((c) => c.textContent.trim()).join('|')));
+  assert.deepEqual(rows, ['2|claude-haiku-5-5|2.1k|300|$0.0020', '1|claude-sonnet-5-5|23k|852|$0.04']);
+  await t.shot('23-usage-per-reply-dark');
   assert.deepEqual(t.consoleErrors, []);
   await t.page.close();
 });

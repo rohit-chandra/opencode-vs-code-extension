@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.4.0
+
+### Added
+
+- **Hugging Face** for Direct BYOK: open models from the Hub through Inference Providers (one Hugging Face token, `HF_TOKEN` / `HUGGINGFACE_HUB_TOKEN` also read from the environment), your own dedicated Inference Endpoint, and a local Text Generation Inference server.
+- **Ask / Auto** approvals. Ask (default) waits for your approval before commands, file edits and tool calls; Auto proceeds without asking, like the Claude app's auto mode. A shield button under the message box, `/auto`, `/ask`, **Switch to Auto** on approval cards, *OpenCode Hub: Toggle Auto Mode*, and the user-only setting `opencodeHub.approvals`.
+- **Claude Code can ask for approval.** Tool calls that its permission mode does not already allow are shown in the chat (through `--permission-prompt-tool` and a small local MCP bridge), with Allow once, Always allow (for the rest of the session) and Deny.
+- **Tokens for the open session** next to the model under the message box, with cost when known; hover for in/out and replies, click for details.
+- A **per-reply** table in the usage panel's "This session" section: model, tokens in and out, and cost of each reply.
+- **Claude Code and Codex list the models your plan includes, by their real names.** Claude Code's models come from the CLI itself for the signed-in account (for example *Default (Opus 5.5)*, *Fable 5.2*, *Opus 5.5*, *Sonnet 5.5*, *Haiku 5.5*) instead of the bare aliases `opus`, `sonnet`, `haiku`; Codex's come from `codex app-server` (the GPT models of your ChatGPT plan). The list refreshes after you sign in or switch to an API key. The model picker also shows a short description of each model.
+
+### Changed
+
+- The token count moved from the top bar's usage icon to the session pill under the message box.
+- In a typical side bar width, the Ask label and the session cost collapse into their tooltips so the model name keeps its room. Auto always stays labelled.
+
 ## 0.3.0
 
 ### Added

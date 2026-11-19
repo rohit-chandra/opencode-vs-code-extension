@@ -186,6 +186,25 @@ describe.skipIf(!bin)('ChatController with the real opencode engine', () => {
     expect(tool).toMatchObject({ tool: 'bash', status: 'completed' });
   });
 
+  it('auto mode approves opencode permission requests without showing them', async () => {
+    await controller.handleMessage({ type: 'setApprovals', mode: 'auto' });
+    expect(host.view!.approvals).toBe('auto');
+    expect(ctx.settings.approvals).toBe('auto');
+    try {
+      const tools = () => host.view!.messages.flatMap((m) => m.parts).filter((p) => p.type === 'tool').length;
+      const before = tools();
+      const posted = host.posted.length;
+      await controller.handleMessage({ type: 'send', text: 'auto [[tool:bash {"command":"echo auto-ok","description":"echo"}]]' });
+      const v = await host.until((s) => s.activity === 'idle' && s.messages.flatMap((m) => m.parts).filter((p) => p.type === 'tool').length > before && s.messages.at(-1)?.role === 'assistant' && !!s.messages.at(-1)?.completedAt, 60_000, 'auto tool');
+      const tool = v.messages.flatMap((m) => m.parts).filter((p) => p.type === 'tool').pop()!;
+      expect(tool).toMatchObject({ tool: 'bash', status: 'completed' });
+      expect(host.posted.slice(posted).some((m) => m.type === 'patch' && (m.patch.permissions?.length ?? 0) > 0)).toBe(false);
+    } finally {
+      await controller.handleMessage({ type: 'send', text: '/ask' });
+    }
+    expect(host.view!.approvals).toBe('ask');
+  });
+
   it('switches sessions, restores history and keeps usage per session', async () => {
     const first = host.view!.sessionId!;
     await controller.handleMessage({ type: 'newSession' });

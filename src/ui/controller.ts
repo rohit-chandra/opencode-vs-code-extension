@@ -13,7 +13,8 @@ import type { ProviderConfig } from '../engines/direct/presets';
 import type { AvatarStyle, HostToWebview, ViewState, WebviewToHost } from '../shared/protocol';
 import { applyMessageEvent, messageText } from '../shared/reducer';
 import { ENGINE_LABELS } from '../shared/types';
-import type { Attachment, AuthStatus, ChatMessage, EngineEvent, EngineId, ModelRef, SessionInfo } from '../shared/types';
+import { approvalMode } from '../shared/types';
+import type { ApprovalMode, Attachment, AuthStatus, ChatMessage, EngineEvent, EngineId, ModelRef, SessionInfo } from '../shared/types';
 
 export interface PickItem<T> {
   label: string;
@@ -103,6 +104,7 @@ export class ChatController {
       canRetry: false,
       recentModels: [],
       auth: undefined,
+      approvals: approvalMode(host.config<string>('approvals', 'ask')),
       panel: { name: 'none', nonce: 0 },
       notice: undefined,
       loading: true,
@@ -297,6 +299,13 @@ export class ChatController {
       return;
     }
     if (event.type === 'session.updated') this.ledger.setSessionTitle(engineId, event.session.id, event.session.title);
+    // Auto mode: approve right away, for any engine and session (engines that ask in-process do this themselves).
+    if (event.type === 'permission.asked' && this.state.approvals === 'auto') {
+      const engine = this.engines.get(engineId);
+      this.host.log.info(`Auto-approved: ${event.request.title}`);
+      void engine?.replyPermission?.(event.request.sessionId, event.request.id, 'once').catch((e) => this.host.log.warn(`auto-approve: ${errorMessage(e)}`));
+      return;
+    }
     if (engineId !== this.state.engine) return;
 
     switch (event.type) {
@@ -636,6 +645,10 @@ export class ChatController {
         return this.manageProviders();
       case 'login':
         return this.accountMenu();
+      case 'auto':
+        return this.setApprovals(args.toLowerCase() === 'off' ? 'ask' : 'auto');
+      case 'ask':
+        return this.setApprovals('ask');
       case 'model': {
         if (!args) return this.openPanel('models');
         const q = args.toLowerCase();
@@ -774,7 +787,7 @@ export class ChatController {
 
   /** Settings changed outside the chat view. */
   onConfigChanged(providersChanged = true): void {
-    this.set({ avatar: { enabled: this.host.config<boolean>('avatar.enabled', true), style: avatarStyle(this.host.config<string>('avatar.style', 'buddy')) }, zoom: clampZoom(this.host.config<number>('chat.zoom', 1)), trusted: this.host.workspaceTrusted() });
+    this.set({ avatar: { enabled: this.host.config<boolean>('avatar.enabled', true), style: avatarStyle(this.host.config<string>('avatar.style', 'buddy')) }, zoom: clampZoom(this.host.config<number>('chat.zoom', 1)), trusted: this.host.workspaceTrusted(), approvals: approvalMode(this.host.config<string>('approvals', 'ask')) });
     if (providersChanged && (this.state.engine === 'direct' || this.state.engine === 'vscode-lm')) this.debounce('config', 400, () => void this.restartEngine());
   }
 
@@ -888,6 +901,8 @@ export class ChatController {
     await this.host.updateConfig(account.modeSetting, 'apiKey');
     this.stopSignInWait();
     await this.refreshAuth();
+    this.invalidateModels();
+    void this.refreshCatalog();
     this.notify('info', `${ENGINE_LABELS[engine.id]} now uses your API key.`);
   }
 
@@ -905,6 +920,7 @@ export class ChatController {
         this.stopSignInWait();
         this.set({ auth: { ...status, pending: undefined } });
         this.notify('info', `Signed in${status.label ? `: ${status.label}` : ''}.`);
+        this.invalidateModels();
         this.debounce('catalog', 300, () => void this.refreshCatalog());
         return;
       }
@@ -924,9 +940,30 @@ export class ChatController {
     this.signInPending = undefined;
   }
 
+  /** Ask before tools run, or proceed without asking. Switching to auto also approves what is waiting. */
+  async setApprovals(mode: ApprovalMode): Promise<void> {
+    const changed = mode !== this.state.approvals;
+    this.set({ approvals: mode });
+    await this.host.updateConfig('approvals', mode);
+    if (mode === 'auto') {
+      const waiting = this.state.permissions;
+      if (waiting.length) this.set({ permissions: [] });
+      for (const p of waiting) await this.guard('Could not approve', async () => this.engine.replyPermission?.(p.sessionId, p.id, 'once'));
+    }
+    if (changed) this.notify('info', mode === 'auto' ? 'Auto mode: the agent proceeds without asking. /ask switches back.' : 'Ask mode: the agent asks before running tools and changing files.');
+  }
+
   /** The sign-in setting of an engine changed outside the chat. */
   onAuthConfigChanged(): void {
-    if (this.engine.account) this.debounce('auth', 200, () => void this.refreshAuth());
+    if (!this.engine.account) return;
+    this.invalidateModels();
+    this.debounce('auth', 200, () => void Promise.all([this.refreshAuth(), this.refreshCatalog()]));
+  }
+
+  /** Models depend on the account (plan) the engine is signed in with. */
+  private invalidateModels(): void {
+    const engine = this.engine as Engine & { invalidateModels?: () => void };
+    if (engine.account) engine.invalidateModels?.();
   }
 
   private async connectOpencodeProvider(): Promise<void> {
@@ -985,8 +1022,15 @@ export class ChatController {
       else return;
     } else if (choice.kind === 'preset') {
       const preset = presetById(choice.id)!;
-      await this.host.updateConfig('providers', [...configured, { id: preset.id, name: preset.name, type: preset.type, baseUrl: preset.baseUrl }]);
-      if (!preset.keyless) await this.promptKey(preset.id, preset.name);
+      let baseUrl = preset.baseUrl;
+      if (preset.askBaseUrl) {
+        const url = await this.host.input({ title: `${preset.name}: URL`, prompt: `The endpoint's OpenAI-compatible base URL, e.g. ${preset.baseUrl}`, placeholder: preset.baseUrl });
+        if (!url?.trim() || url.includes('<')) return;
+        baseUrl = url.trim().replace(/\/+$/, '');
+        if (!/\/v1$/.test(baseUrl)) baseUrl += '/v1';
+      }
+      await this.host.updateConfig('providers', [...configured, { id: preset.id, name: preset.name, type: preset.type, baseUrl }]);
+      if (!preset.keyless) await this.promptKey(preset.id, preset.name, preset.keyHint);
     } else {
       const baseUrl = await this.host.input({ title: 'Base URL', prompt: choice.type === 'anthropic' ? 'e.g. https://my-gateway.example.com' : 'e.g. http://localhost:8000/v1', placeholder: 'https://…' });
       if (!baseUrl) return;
@@ -1001,8 +1045,8 @@ export class ChatController {
     else this.notify('info', 'Provider saved. Switch to the Direct BYOK engine with /engine byok to use it.');
   }
 
-  private async promptKey(id: string, name: string): Promise<void> {
-    const key = await this.host.input({ title: `API key for ${name}`, prompt: 'Stored in VS Code Secret Storage (your OS keychain), never in settings.', password: true, placeholder: 'Paste the API key' });
+  private async promptKey(id: string, name: string, hint?: string): Promise<void> {
+    const key = await this.host.input({ title: `API key for ${name}`, prompt: `${hint ? `${hint}. ` : ''}Stored in VS Code Secret Storage (your OS keychain), never in settings.`, password: true, placeholder: 'Paste the API key' });
     if (key?.trim()) await this.host.secrets.set(secretKeyFor(id), key.trim());
   }
 
@@ -1096,6 +1140,8 @@ export class ChatController {
         return this.useApiKey();
       case 'accountMenu':
         return this.accountMenu();
+      case 'setApprovals':
+        return this.setApprovals(msg.mode === 'auto' ? 'auto' : 'ask');
       case 'restartEngine':
         return this.restartEngine();
       case 'openSettings':

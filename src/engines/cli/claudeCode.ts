@@ -6,8 +6,10 @@ import { EngineError } from '../../core/engine';
 import { LocalEngine } from '../../core/localEngine';
 import type { Turn } from '../../core/localEngine';
 import { findExecutable, runCapture } from '../../core/process';
-import type { AuthMode, AuthStatus, EngineCapabilities, McpServerInfo, ModelRef, PromptInput, ProviderInfo, SlashCommand } from '../../shared/types';
+import type { AuthMode, AuthStatus, EngineCapabilities, McpServerInfo, ModelInfo, ModelRef, PromptInput, ProviderInfo, SlashCommand } from '../../shared/types';
+import { claudeInitInfo, claudeModelInfo } from './modelDiscovery';
 import { apiKeySecret, authMode, claudeEnv, parseClaudeAuthStatus, shellExe } from './auth';
+import { APPROVER_SERVER, APPROVER_TOOL, ClaudeApprover } from './claudeApprover';
 import { ClaudeStreamTranslator } from './claudeStream';
 import { StateFile, imageBase64, promptForAgent, readJsonFile, runJsonl } from './common';
 
@@ -19,7 +21,9 @@ interface ClaudeState {
 
 type McpDefs = Record<string, { command?: string; args?: string[]; url?: string; type?: string; [k: string]: unknown }>;
 
-const DEFAULT_MODELS = ['default', 'opus', 'sonnet', 'haiku'];
+/** Used only when the CLI cannot report the account's models. */
+const FALLBACK_MODELS = ['default', 'fable', 'opus', 'sonnet', 'haiku'];
+const MODEL_CACHE_MS = 10 * 60_000;
 
 /**
  * Claude Code engine: drives the user's own `claude` CLI in print mode with stream-json.
@@ -36,17 +40,28 @@ export class ClaudeCodeEngine extends LocalEngine {
     compact: true,
     images: true,
     mcpToggle: true,
-    permissions: false,
+    // Asked through the --permission-prompt-tool bridge (see claudeApprover.ts).
+    permissions: true,
     providerAuth: false,
     remoteSessions: false,
   };
 
   private exe: string | undefined;
   private stateFile: StateFile<ClaudeState>;
+  private approver: ClaudeApprover;
+  private modelCache: { at: number; mode: string; models: ModelInfo[] } | undefined;
+  /** Tools the user chose "Always allow" for, per session (until VS Code restarts). */
+  private alwaysAllowed = new Map<string, Set<string>>();
 
   constructor(ctx: EngineContext) {
     super(ctx, 'claude-code');
     this.stateFile = new StateFile<ClaudeState>(path.join(ctx.storageDir, 'claude-code.json'), { slashCommands: [], disabledMcp: [], mcpStatus: {} });
+    this.approver = new ClaudeApprover(ctx.storageDir);
+  }
+
+  override async dispose(): Promise<void> {
+    this.approver.dispose();
+    await super.dispose();
   }
 
   private env(): NodeJS.ProcessEnv {
@@ -80,6 +95,7 @@ export class ClaudeCodeEngine extends LocalEngine {
   };
 
   protected async checkAvailability(): Promise<{ ok: boolean; detail?: string; version?: string }> {
+    this.modelCache = undefined;
     this.exe = await findExecutable('claude', this.ctx.config<string>('claudeCode.path', ''), this.env());
     if (!this.exe) {
       return { ok: false, detail: 'Claude Code CLI not found. Install it (npm i -g @anthropic-ai/claude-code) or set "opencodeHub.claudeCode.path", then sign in with your Claude account.' };
@@ -88,17 +104,42 @@ export class ClaudeCodeEngine extends LocalEngine {
     return { ok: true, version: v.stdout.trim().split(/\s+/)[0] || undefined };
   }
 
+  /** Forget the cached model list (after signing in, or switching between account and API key). */
+  invalidateModels(): void {
+    this.modelCache = undefined;
+  }
+
+  /** The models the signed-in account can use, with their real names (e.g. "Opus 5.5"), as the CLI reports them. */
+  private async accountModels(): Promise<ModelInfo[]> {
+    const mode = this.account.mode();
+    const cached = this.modelCache;
+    if (cached && cached.mode === mode && Date.now() - cached.at < (cached.models.length ? MODEL_CACHE_MS : 30_000)) return cached.models;
+    let models: ModelInfo[] = [];
+    if (this.exe) {
+      const env = await this.runEnv().catch(() => undefined);
+      const info = env ? await claudeInitInfo(this.exe, env, this.ctx.cwd()) : undefined;
+      models = (info?.models ?? []).map(claudeModelInfo);
+      if (info?.commands.length) {
+        const state = await this.stateFile.read();
+        if (state.slashCommands.length === 0) {
+          await this.stateFile.update({ slashCommands: info.commands });
+          this.emit({ type: 'catalog.changed' });
+        }
+      }
+      if (!models.length) this.ctx.log.warn('Claude Code did not report its models; showing the standard aliases.');
+    }
+    this.modelCache = { at: Date.now(), mode, models };
+    return models;
+  }
+
   async listProviders(): Promise<ProviderInfo[]> {
     const extra = this.ctx.config<string[]>('claudeCode.models', []);
-    const ids = [...new Set([...DEFAULT_MODELS, ...(Array.isArray(extra) ? extra : [])])];
-    return [
-      {
-        id: 'claude-code',
-        name: 'Claude Code',
-        connected: true,
-        models: ids.map((id) => ({ providerId: 'claude-code', modelId: id, name: id === 'default' ? 'Default (from Claude Code settings)' : id, supportsImages: true, supportsTools: true })),
-      },
-    ];
+    let models = await this.accountModels();
+    if (!models.length) models = FALLBACK_MODELS.map((id) => ({ providerId: 'claude-code', modelId: id, name: id === 'default' ? 'Default (from Claude Code settings)' : id.charAt(0).toUpperCase() + id.slice(1), supportsImages: true, supportsTools: true }));
+    for (const id of Array.isArray(extra) ? extra : []) {
+      if (typeof id === 'string' && !models.some((m) => m.modelId === id || m.resolvedId === id)) models = [...models, { providerId: 'claude-code', modelId: id, name: id, supportsImages: true, supportsTools: true }];
+    }
+    return [{ id: 'claude-code', name: 'Claude Code', connected: true, models }];
   }
 
   override async defaultModel(): Promise<ModelRef | undefined> {
@@ -179,18 +220,37 @@ export class ClaudeCodeEngine extends LocalEngine {
       if (session.meta.forkPending) args.push('--fork-session');
     }
 
+    const env = await this.runEnv();
     const state = await this.stateFile.read();
-    let mcpFile: string | undefined;
-    if (state.disabledMcp.length > 0) {
+    const servers: McpDefs = {};
+    const strict = state.disabledMcp.length > 0;
+    if (strict) {
       const { defs } = await this.mcpDefinitions();
-      const enabled = Object.fromEntries(Object.entries(defs).filter(([name]) => !state.disabledMcp.includes(name)));
+      Object.assign(servers, Object.fromEntries(Object.entries(defs).filter(([name]) => !state.disabledMcp.includes(name))));
+    }
+    // Tool approvals: Claude Code asks our bridge, which shows the request in the chat (or
+    // approves it straight away in Auto mode). Not needed when permissions are bypassed anyway.
+    let approver: { close: () => void } | undefined;
+    if (mode !== 'bypassPermissions') {
+      const sid = session.info.id;
+      const always = this.alwaysAllowed.get(sid) ?? new Set<string>();
+      this.alwaysAllowed.set(sid, always);
+      const opened = await this.approver.open((req) => this.askPermission(sid, req, signal), always);
+      approver = opened;
+      servers[APPROVER_SERVER] = opened.server as McpDefs[string];
+      args.push('--permission-prompt-tool', APPROVER_TOOL);
+      // A permission prompt waits for the user; don't let Claude Code time it out.
+      env.MCP_TOOL_TIMEOUT ??= String(24 * 3600_000);
+    }
+    let mcpFile: string | undefined;
+    if (strict || approver) {
       mcpFile = path.join(this.ctx.storageDir, `claude-mcp-${session.info.id}.json`);
       await fs.mkdir(this.ctx.storageDir, { recursive: true });
-      await fs.writeFile(mcpFile, JSON.stringify({ mcpServers: enabled }), 'utf8');
-      args.push('--strict-mcp-config', '--mcp-config', mcpFile);
+      await fs.writeFile(mcpFile, JSON.stringify({ mcpServers: servers }), 'utf8');
+      if (strict) args.push('--strict-mcp-config');
+      args.push('--mcp-config', mcpFile);
     }
 
-    const env = await this.runEnv();
     const translator = new ClaudeStreamTranslator(assistant);
     try {
       const { code, stderr } = await runJsonl({
@@ -224,6 +284,7 @@ export class ClaudeCodeEngine extends LocalEngine {
         throw new Error(`Claude Code exited (code ${code ?? '?'}) before finishing.${stderr.trim() ? ' ' + stderr.trim().slice(-500) : ''}${/login|auth|credential|api key/i.test(stderr) ? ' Use /login to sign in with your Claude account.' : ''}`);
       }
     } finally {
+      approver?.close();
       if (mcpFile) await fs.rm(mcpFile, { force: true }).catch(() => undefined);
     }
   }

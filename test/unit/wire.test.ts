@@ -76,7 +76,7 @@ describe('usage and URL helpers', () => {
 
 describe('resolveProvider', () => {
   it('fills presets and detects local endpoints that need no key', () => {
-    expect(resolveProvider({ id: 'openai', type: 'openai-compatible' })).toMatchObject({ name: 'OpenAI', baseUrl: 'https://api.openai.com/v1', envKey: 'OPENAI_API_KEY', keyless: false });
+    expect(resolveProvider({ id: 'openai', type: 'openai-compatible' })).toMatchObject({ name: 'OpenAI', baseUrl: 'https://api.openai.com/v1', envKeys: ['OPENAI_API_KEY'], keyless: false });
     expect(resolveProvider({ id: 'ollama', type: 'openai-compatible' })).toMatchObject({ baseUrl: 'http://localhost:11434/v1', keyless: true });
     expect(resolveProvider({ id: 'mine', type: 'openai-compatible', baseUrl: 'http://127.0.0.1:8000/v1' }).keyless).toBe(true);
     expect(resolveProvider({ id: 'mine', type: 'openai-compatible', baseUrl: 'https://llm.corp.example/v1' }).keyless).toBe(false);

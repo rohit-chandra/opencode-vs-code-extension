@@ -186,9 +186,8 @@ export function ModelsPanel({ s, onClose }: { s: ViewState; onClose: () => void 
                 <li key={m.modelId} class={`row ${active ? 'active' : ''}`}>
                   <button type="button" class="row-main" onClick={() => (send({ type: 'setModel', model: { providerId: m.providerId, modelId: m.modelId } }), onClose())}>
                     <span class="row-title">{m.name}</span>
-                    <span class="row-sub">
-                      {m.modelId !== m.name ? m.modelId : ''}
-                      {m.contextWindow ? `${m.modelId !== m.name ? ', ' : ''}${compact(m.contextWindow)} context` : ''}
+                    <span class="row-sub" title={[m.resolvedId ?? m.modelId, m.description].filter(Boolean).join(' · ')}>
+                      {[m.modelId !== m.name ? m.modelId : '', m.contextWindow ? `${compact(m.contextWindow)} context` : '', m.description ?? ''].filter(Boolean).join(' · ')}
                     </span>
                   </button>
                   {active && <IconCheck size={14} class="row-check" />}
@@ -290,6 +289,44 @@ function Stats({ u, messages }: { u: TokenUsage; messages: number }) {
   );
 }
 
+/** Tokens of each reply in the open session, newest first, so you can see what each turn cost. */
+function ReplyRows({ s }: { s: ViewState }) {
+  const replies = s.messages.filter((m) => m.role === 'assistant' && m.usage && !m.id.startsWith('local_'));
+  if (replies.length < 2) return null;
+  const max = Math.max(1, ...replies.map((m) => tokensAll(m.usage!)));
+  const rows = replies.map((m, i) => ({ m, n: i + 1 })).reverse().slice(0, 30);
+  return (
+    <details class="reply-rows" open={replies.length <= 8}>
+      <summary>Per reply ({replies.length})</summary>
+      <table class="usage-table replies">
+        <thead>
+          <tr>
+            <th scope="col">#</th>
+            <th scope="col">Model</th>
+            <th scope="col" class="num">In</th>
+            <th scope="col" class="num">Out</th>
+            <th scope="col" class="num">Cost</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map(({ m, n }) => (
+            <tr key={m.id} title={`${tokensIn(m.usage!).toLocaleString()} in (${m.usage!.cacheRead.toLocaleString()} from cache), ${tokensOut(m.usage!).toLocaleString()} out`}>
+              <td class="num reply-n">{n}</td>
+              <th scope="row" class="reply-model">
+                <span class="reply-bar" style={{ width: `${Math.max(3, (tokensAll(m.usage!) / max) * 100)}%` }} />
+                <span class="reply-model-name">{m.model?.modelId ?? ''}</span>
+              </th>
+              <td class="num">{compact(tokensIn(m.usage!))}</td>
+              <td class="num">{compact(tokensOut(m.usage!))}</td>
+              <td class="num">{m.usage!.cost > 0 ? money(m.usage!.cost) : ''}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </details>
+  );
+}
+
 /** Ranked bars: one hue, length encodes total tokens; the numbers sit beside each bar. */
 function ModelRows({ rows, providerNames }: { rows: UsageRow[]; providerNames: Map<string, string> }) {
   const max = Math.max(1, ...rows.map((r) => tokensAll(r.usage)));
@@ -380,10 +417,11 @@ export function UsagePanel({ s, onClose }: { s: ViewState; onClose: () => void }
       }
     >
       <section class="usage-section">
-        <h3>This session</h3>
+        <h3>This session{session?.title ? <span class="usage-session-title">: {session.title}</span> : null}</h3>
         {session ? (
           <>
             <Stats u={session.usage} messages={session.messages} />
+            <ReplyRows s={s} />
             {session.byModel.length > 1 && <ModelRows rows={session.byModel} providerNames={providerNames} />}
             {session.byModel.length === 1 && (
               <p class="usage-note">

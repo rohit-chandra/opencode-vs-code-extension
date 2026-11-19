@@ -36,6 +36,8 @@ export const IconCopy = svg(
     <path d="M10.5 5.5v-2a1 1 0 0 0-1-1h-6a1 1 0 0 0-1 1v6a1 1 0 0 0 1 1h2" />
   </>,
 );
+export const IconShield = svg(<path d="M8 1.8 13 3.6v4c0 3.1-2.1 5.4-5 6.6-2.9-1.2-5-3.5-5-6.6v-4L8 1.8Z" />);
+export const IconZap = svg(<path d="M9 1.8 3.5 9H8l-1 5.2L12.5 7H8l1-5.2Z" />);
 export const IconUser = svg(
   <>
     <circle cx="8" cy="5.5" r="2.5" />

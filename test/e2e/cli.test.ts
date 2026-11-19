@@ -119,6 +119,72 @@ describe.skipIf(!claudeBin)('Claude Code engine (real `claude` CLI + mock Anthro
     expect(assistant.usage!.output).toBe(60);
   });
 
+  it('lists the models the account can use, with their real names', async () => {
+    const [provider] = await engine.listProviders();
+    const models = provider.models;
+    expect(models[0]).toMatchObject({ modelId: 'default' });
+    expect(models[0].name).toMatch(/^Default \(\w+ \d/);
+    // Aliases stay the ids the CLI takes, but are shown by model and version (e.g. "Opus 5.5").
+    const opus = models.find((m) => m.modelId === 'opus')!;
+    expect(opus.name).toMatch(/^Opus \d/);
+    expect(opus.resolvedId).toMatch(/^claude-opus-/);
+    expect(models.every((m) => !/\$/.test(m.description ?? ''))).toBe(true);
+    expect(models.length).toBeGreaterThanOrEqual(3);
+  });
+
+  it('asks before a tool runs, in the chat: allow, always allow, deny', async () => {
+    const rec = record(engine);
+    const session = await engine.createSession();
+    const model = { providerId: 'claude-code', modelId: 'sonnet' };
+    // acceptEdits (the default) lets Claude Code edit files, but an MCP tool needs approval.
+    const asked = rec.waitFor('permission.asked', (e) => e.request.sessionId === session.id, 60_000);
+    await engine.sendPrompt(session.id, { text: 'add please [[tool!:mcp__mockmcp__add {"a":1,"b":2}]]', attachments: [], model });
+    const { request } = await asked;
+    expect(request).toMatchObject({ kind: 'mcp', title: 'Allow add (mockmcp MCP server)?' });
+    expect(JSON.parse(request.detail!)).toEqual({ a: 1, b: 2 });
+    await engine.replyPermission(session.id, request.id, 'always');
+    await rec.waitIdle(session.id, 100_000);
+    let tool = rec.messages(session.id)[1].parts.find((p) => p.type === 'tool')!;
+    expect(tool).toMatchObject({ tool: 'mcp__mockmcp__add', status: 'completed' });
+    expect((tool as { output: string }).output).toContain('3');
+
+    // "Always allow" holds for the rest of the session: no second prompt.
+    const asks = () => rec.events.filter((e) => e.type === 'permission.asked').length;
+    const before = asks();
+    await engine.sendPrompt(session.id, { text: 'again [[tool!:mcp__mockmcp__add {"a":5,"b":5}]]', attachments: [], model });
+    await rec.waitIdle(session.id, 100_000);
+    expect(asks()).toBe(before);
+    tool = rec.messages(session.id)[3].parts.find((p) => p.type === 'tool')!;
+    expect((tool as { output: string }).output).toContain('10');
+
+    // Deny: the tool does not run, and Claude Code is told why.
+    const other = await engine.createSession();
+    const asked2 = rec.waitFor('permission.asked', (e) => e.request.sessionId === other.id, 60_000);
+    await engine.sendPrompt(other.id, { text: 'echo [[tool!:mcp__mockmcp__echo {"text":"secret"}]]', attachments: [], model });
+    await engine.replyPermission(other.id, (await asked2).request.id, 'reject');
+    await rec.waitIdle(other.id, 100_000);
+    tool = rec.messages(other.id)[1].parts.find((p) => p.type === 'tool')!;
+    expect(tool).toMatchObject({ status: 'error' });
+    expect(JSON.stringify(tool)).toMatch(/denied/i);
+    expect(JSON.stringify(tool)).not.toContain('ECHO: secret');
+  });
+
+  it('auto mode runs tools without asking', async () => {
+    ctx.settings.approvals = 'auto';
+    try {
+      const rec = record(engine);
+      const session = await engine.createSession();
+      await engine.sendPrompt(session.id, { text: 'auto [[tool!:mcp__mockmcp__add {"a":40,"b":2}]]', attachments: [], model: { providerId: 'claude-code', modelId: 'sonnet' } });
+      await rec.waitIdle(session.id, 100_000);
+      expect(rec.events.some((e) => e.type === 'permission.asked')).toBe(false);
+      const tool = rec.messages(session.id)[1].parts.find((p) => p.type === 'tool')!;
+      expect(tool).toMatchObject({ status: 'completed' });
+      expect((tool as { output: string }).output).toContain('42');
+    } finally {
+      delete ctx.settings.approvals;
+    }
+  });
+
   it('lists MCP servers from .mcp.json and honours the toggle', async () => {
     expect((await engine.listMcp()).map((s) => [s.name, s.enabled, s.source])).toEqual([
       ['mockmcp', true, '.mcp.json'],
@@ -284,6 +350,12 @@ describe.skipIf(!codexBin)('Codex engine (real `codex` CLI + mock Responses API)
     // The mock accepts any model name, so this still succeeds; the point is that -m is passed through.
     const last = mock.log.filter((l) => l.path === '/responses').pop()!;
     expect(last.body.model).toBe('definitely-not-a-model');
+  });
+
+  it('lists the account\'s models, and the configured default first', async () => {
+    const [provider] = await engine.listProviders();
+    expect(provider.models[0]).toMatchObject({ modelId: 'default', name: 'Default (mock-small)' });
+    expect(provider.models.filter((m) => m.modelId !== 'default').every((m) => m.name && m.modelId)).toBe(true);
   });
 
   it('reports the ChatGPT sign-in state, and the stored key in API-key mode', async () => {

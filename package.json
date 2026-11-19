@@ -2,7 +2,7 @@
   "name": "opencode-hub",
   "displayName": "OpenCode Hub — BYOK AI Chat",
   "description": "Open-source chat for VS Code that works with opencode first, plus Claude Code, Codex (ChatGPT), GitHub Copilot and any OpenAI-compatible or Anthropic model with your own keys. Sessions, /commands, file attachments, MCP toggles, token usage stats and a 3D companion.",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "publisher": "rohit-chandra",
   "license": "MIT",
   "private": true,
@@ -125,6 +125,12 @@
         "command": "opencodeHub.selectModel",
         "title": "Select Model…",
         "category": "OpenCode Hub"
+      },
+      {
+        "command": "opencodeHub.toggleAutoMode",
+        "title": "Toggle Auto Mode (Proceed Without Asking)",
+        "category": "OpenCode Hub",
+        "icon": "$(zap)"
       },
       {
         "command": "opencodeHub.signIn",
@@ -378,6 +384,20 @@
           "type": "string",
           "default": "",
           "markdownDescription": "Password for the attached server (`OPENCODE_SERVER_PASSWORD`). Prefer the environment variable for shared settings."
+        },
+        "opencodeHub.approvals": {
+          "type": "string",
+          "enum": [
+            "ask",
+            "auto"
+          ],
+          "enumDescriptions": [
+            "Ask before the agent runs commands, edits files or calls tools.",
+            "Auto mode: the agent proceeds without asking (like the Claude app's auto mode)."
+          ],
+          "default": "ask",
+          "scope": "application",
+          "markdownDescription": "Whether the agent asks for approval before it acts. `auto` approves every tool call, command and edit without asking: opencode permission requests, Claude Code tool permissions, and MCP tools in Direct BYOK and Copilot. Codex never stops to ask; its `opencodeHub.codex.sandbox` decides what it may do. Switch from the chat with the Ask/Auto button, `/auto` or `/ask`. User setting only, so a workspace cannot turn it on."
         },
         "opencodeHub.claudeCode.path": {
           "type": "string",

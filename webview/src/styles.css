@@ -1121,6 +1121,58 @@ kbd {
   font-size: 0.88em;
   opacity: 0.75;
 }
+.menu-item.two-line {
+  align-items: flex-start;
+  white-space: normal;
+  padding: 6px 8px;
+}
+.menu-item.two-line > .icon {
+  flex: none;
+  margin-top: 2px;
+}
+.menu-text {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+.menu-desc {
+  font-size: 0.86em;
+  opacity: 0.72;
+}
+.menu-note {
+  padding: 4px 8px 2px;
+  font-size: 0.84em;
+  color: var(--oh-muted);
+  white-space: normal;
+}
+.controls {
+  position: relative;
+}
+/* The approvals menu is placed against the control row's right edge, so it stays on screen. */
+.controls > .approvals-anchor {
+  flex: none;
+  position: static;
+}
+.approvals-menu {
+  left: auto;
+  right: 0;
+  width: min(270px, calc(100vw - 24px));
+}
+.pill.approvals.auto {
+  color: var(--oh-warn);
+}
+.pill.session-tokens {
+  margin-left: auto;
+  flex: none;
+  font-variant-numeric: tabular-nums;
+}
+.pill.session-tokens + .context-meter {
+  margin-left: 0;
+}
+.session-cost {
+  opacity: 0.85;
+}
 .menu-sep {
   height: 1px;
   margin: 4px 0;
@@ -1578,4 +1630,79 @@ kbd {
 }
 .context-meter.full {
   color: var(--vscode-errorForeground, #f14c4c);
+}
+
+/* Per-reply token rows in the usage panel */
+.usage-session-title {
+  font-weight: 400;
+  color: var(--oh-muted);
+}
+.reply-rows {
+  margin-top: 8px;
+}
+.reply-rows > summary {
+  cursor: pointer;
+  color: var(--oh-muted);
+  font-size: 0.9em;
+  padding: 2px 0;
+}
+.usage-table.replies thead th {
+  width: auto;
+  color: var(--oh-muted);
+  font-size: 0.82em;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+.usage-table.replies thead th.num {
+  text-align: right;
+}
+.usage-table.replies .reply-n,
+.usage-table.replies thead th:first-child {
+  width: 26px;
+  text-align: left;
+}
+.usage-table.replies .reply-model {
+  position: relative;
+  width: auto;
+}
+.reply-bar {
+  position: absolute;
+  left: 0;
+  top: 50%;
+  height: 16px;
+  transform: translateY(-50%);
+  border-radius: 3px;
+  background: var(--oh-accent);
+  opacity: 0.16;
+}
+.reply-model-name {
+  position: relative;
+  padding-left: 4px;
+}
+.usage-table.replies .num {
+  width: 52px;
+}
+
+/* A usual side bar: the model name keeps its room; "Ask" and the session cost become tooltips. Auto stays labelled. */
+@media (max-width: 520px) {
+  .pill.approvals.ask .pill-text,
+  .session-cost {
+    display: none;
+  }
+}
+/* Narrow side bar: icons and numbers only. */
+@media (max-width: 380px) {
+  .pill.approvals .pill-text {
+    display: none;
+  }
+  .controls {
+    gap: 0;
+  }
+  .controls .pill {
+    padding-inline: 4px;
+  }
+  /* The agent name may give way too, after the model name. */
+  .controls > .menu-anchor:not(.approvals-anchor) {
+    flex: 0 1 auto;
+  }
 }

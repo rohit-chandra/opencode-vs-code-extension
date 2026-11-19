@@ -6,7 +6,7 @@ import { MessageList } from './components/Messages';
 import { McpPanel, ModelsPanel, SessionsPanel, UsagePanel } from './components/Panels';
 import type { PanelName } from './components/Panels';
 import { Requests } from './components/Requests';
-import { compact, money, tokensIn, tokensOut } from './format';
+import { money, tokensIn, tokensOut } from './format';
 import { deriveMood, moodDeadline, useStore, useTick } from './hooks';
 import { IconChart, IconChevron, IconClose, IconEye, IconHistory, IconKey, IconPlug, IconPlus, IconRefresh, IconUser, IconWarn } from './icons';
 import type { ViewState } from '../../src/shared/protocol';
@@ -177,7 +177,6 @@ export function App() {
           onClick={() => toggle('usage')}
         >
           <IconChart />
-          {sessionTokens > 0 && <span class="usage-count">{compact(sessionTokens)}</span>}
         </button>
         <button type="button" class="icon-btn" title={s.avatar.enabled ? 'Hide companion' : 'Show companion'} aria-label={s.avatar.enabled ? 'Hide companion' : 'Show companion'} aria-pressed={s.avatar.enabled} onClick={() => send({ type: 'setAvatar', enabled: !s.avatar.enabled })}>
           <IconEye />

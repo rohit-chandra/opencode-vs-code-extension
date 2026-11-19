@@ -21,6 +21,9 @@ export function Requests({ permissions, questions }: { permissions: PermissionRe
             <button type="button" class="btn quiet" onClick={() => send({ type: 'permissionReply', requestId: p.id, reply: 'reject' })}>
               Deny
             </button>
+            <button type="button" class="btn quiet auto-switch" title="Approve this and everything after it without asking (/ask switches back)" onClick={() => send({ type: 'setApprovals', mode: 'auto' })}>
+              Switch to Auto
+            </button>
           </div>
         </div>
       ))}

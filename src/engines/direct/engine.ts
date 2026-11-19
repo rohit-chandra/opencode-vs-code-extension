@@ -57,13 +57,14 @@ export class DirectEngine extends LocalEngine {
   }
 
   private async apiKey(p: ReturnType<typeof resolveProvider>): Promise<string | undefined> {
-    return (await this.ctx.secrets.get(secretKeyFor(p.id))) || (p.envKey ? (this.ctx.env ?? process.env)[p.envKey] : undefined) || undefined;
+    const env = this.ctx.env ?? process.env;
+    return (await this.ctx.secrets.get(secretKeyFor(p.id))) || p.envKeys.map((k) => env[k]).find(Boolean) || undefined;
   }
 
   protected async checkAvailability(): Promise<{ ok: boolean; detail?: string }> {
     const providers = this.providers();
     if (providers.length === 0) {
-      return { ok: false, detail: 'No BYOK provider configured yet. Run "OpenCode Hub: Manage BYOK Providers & API Keys…" (or /providers) to add OpenAI, Anthropic, OpenRouter, Ollama or any OpenAI-compatible endpoint.' };
+      return { ok: false, detail: 'No BYOK provider configured yet. Run "OpenCode Hub: Manage BYOK Providers & API Keys…" (or /providers) to add OpenAI, Anthropic, OpenRouter, Hugging Face, Ollama or any OpenAI-compatible endpoint.' };
     }
     return { ok: true };
   }

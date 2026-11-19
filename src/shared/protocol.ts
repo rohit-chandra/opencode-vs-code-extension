@@ -1,5 +1,6 @@
 import type {
   AgentInfo,
+  ApprovalMode,
   Attachment,
   AuthStatus,
   ChatMessage,
@@ -54,6 +55,8 @@ export interface ViewState {
   recentModels: ModelRef[];
   /** Account sign-in of the active engine (Claude Code, Codex); undefined for engines without one. */
   auth: AuthStatus | undefined;
+  /** Ask before tools run (default), or proceed without asking. */
+  approvals: ApprovalMode;
   panel: { name: 'none' | 'sessions' | 'mcp' | 'usage' | 'models'; nonce: number };
   notice: { level: 'info' | 'warn' | 'error'; text: string; nonce: number } | undefined;
   loading: boolean;
@@ -108,6 +111,7 @@ export type WebviewToHost =
   | { type: 'useApiKey' }
   /** Account options: sign in, API key, sign out. */
   | { type: 'accountMenu' }
+  | { type: 'setApprovals'; mode: ApprovalMode }
   | { type: 'restartEngine' }
   | { type: 'openSettings' }
   /** Sent once the companion is on screen; tells the host which renderer the webview ended up with. */

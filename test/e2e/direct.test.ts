@@ -170,6 +170,41 @@ describe('Direct BYOK engine (mock OpenAI-compatible + Anthropic servers)', () =
     expect(rec.events.filter((e) => e.type === 'permission.asked').length).toBe(before + 1);
   });
 
+  it('auto mode runs MCP tools without asking', async () => {
+    ctx.settings.approvals = 'auto';
+    try {
+      const rec = record(engine);
+      const session = await engine.createSession();
+      await engine.sendPrompt(session.id, { text: 'auto [[tool:mockmcp__echo {"text":"no prompt"}]]', attachments: [], model: { providerId: 'mockoai', modelId: 'mock-small' } });
+      await rec.waitIdle(session.id);
+      expect(rec.events.some((e) => e.type === 'permission.asked')).toBe(false);
+      expect(rec.messages(session.id)[1].parts.find((p) => p.type === 'tool')).toMatchObject({ status: 'completed' });
+    } finally {
+      delete ctx.settings.approvals;
+    }
+  });
+
+  it('Hugging Face: uses HF_TOKEN / HUGGINGFACE_HUB_TOKEN when no key is stored', async () => {
+    const hfCtx = makeContext({ settings: { providers: [{ id: 'huggingface', type: 'openai-compatible', baseUrl: `http://127.0.0.1:${port}/v1` }] }, env: { HUGGINGFACE_HUB_TOKEN: 'hf_test_token' } });
+    const hf = new DirectEngine(hfCtx, mcp);
+    try {
+      expect((await hf.start()).state).toBe('ready');
+      const [provider] = await hf.listProviders();
+      expect(provider).toMatchObject({ id: 'huggingface', name: 'Hugging Face', connected: true });
+      expect(provider.models.length).toBeGreaterThan(0);
+      const rec = record(hf);
+      const session = await hf.createSession();
+      const before = mock.log.length;
+      await hf.sendPrompt(session.id, { text: 'hello hub', attachments: [], model: { providerId: 'huggingface', modelId: provider.models[0].modelId } });
+      await rec.waitIdle(session.id);
+      expect(rec.messages(session.id)[1].error).toBeUndefined();
+      expect(mock.log.slice(before).map((r) => (r as { headers?: { authorization?: string } }).headers?.authorization)).toContain('Bearer hf_test_token');
+    } finally {
+      await hf.dispose();
+      hfCtx.cleanup();
+    }
+  });
+
   it('toggling an MCP server off removes its tools from requests', async () => {
     await engine.setMcpEnabled('mockmcp', false);
     expect((await engine.listMcp())[0]).toMatchObject({ status: 'disabled', enabled: false });

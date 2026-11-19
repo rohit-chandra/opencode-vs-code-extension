@@ -50,6 +50,10 @@ export interface ModelRef {
 
 export interface ModelInfo extends ModelRef {
   name: string;
+  /** One line about the model, e.g. "Best for everyday, complex tasks". */
+  description?: string;
+  /** Full model id behind an alias (e.g. `claude-opus-5-5` for `opus`), when known. */
+  resolvedId?: string;
   contextWindow?: number;
   supportsImages?: boolean;
   supportsTools?: boolean;
@@ -121,6 +125,12 @@ export interface Attachment {
 }
 
 export type PermissionReply = 'once' | 'always' | 'reject';
+
+/** `ask` (default): tool calls wait for the user. `auto`: they are approved without asking. */
+export type ApprovalMode = 'ask' | 'auto';
+export function approvalMode(value: unknown): ApprovalMode {
+  return value === 'auto' ? 'auto' : 'ask';
+}
 
 export interface PermissionRequest {
   id: string;

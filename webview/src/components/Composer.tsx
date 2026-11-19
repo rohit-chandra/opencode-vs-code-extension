@@ -3,8 +3,8 @@ import { filterCommands } from '../../../src/core/slashCommands';
 import type { ViewState } from '../../../src/shared/protocol';
 import { ENGINE_LABELS } from '../../../src/shared/types';
 import type { Attachment, EngineId, SlashCommand } from '../../../src/shared/types';
-import { IconChevron, IconClip, IconClose, IconFile, IconImage, IconSend, IconStop } from '../icons';
-import { compact, tokensAll } from '../format';
+import { IconChart, IconChevron, IconClip, IconClose, IconFile, IconImage, IconSend, IconShield, IconStop, IconZap } from '../icons';
+import { compact, money, tokensAll, tokensIn, tokensOut } from '../format';
 import { send, store } from '../store';
 
 type Popup = { kind: 'slash'; items: SlashCommand[]; index: number } | { kind: 'file'; items: { path: string; relative: string }[]; index: number; start: number; query: string } | undefined;
@@ -46,7 +46,7 @@ export function droppedPaths(dt: DataTransfer): string[] {
 export function Composer({ s, onOpenPanel }: { s: ViewState; onOpenPanel: (p: 'models') => void }) {
   const [text, setText] = useState('');
   const [popup, setPopup] = useState<Popup>();
-  const [menu, setMenu] = useState<'engine' | 'agent' | undefined>();
+  const [menu, setMenu] = useState<'engine' | 'agent' | 'approvals' | undefined>();
   const input = useRef<HTMLTextAreaElement>(null);
   const searchSeq = useRef(0);
   const busy = s.activity !== 'idle';
@@ -291,9 +291,62 @@ export function Composer({ s, onOpenPanel }: { s: ViewState; onOpenPanel: (p: 'm
           </span>
         )}
 
+        <span class="menu-anchor approvals-anchor">
+          <button
+            type="button"
+            class={`pill approvals ${s.approvals}`}
+            aria-haspopup="menu"
+            aria-expanded={menu === 'approvals'}
+            title={s.approvals === 'auto' ? 'Auto mode: the agent proceeds without asking' : 'Ask mode: the agent asks before it acts'}
+            onClick={() => setMenu(menu === 'approvals' ? undefined : 'approvals')}
+          >
+            {s.approvals === 'auto' ? <IconZap size={12} /> : <IconShield size={12} />}
+            <span class="pill-text">{s.approvals === 'auto' ? 'Auto' : 'Ask'}</span>
+          </button>
+          {menu === 'approvals' && (
+            <div class="menu approvals-menu" role="menu">
+              <button type="button" role="menuitemradio" aria-checked={s.approvals === 'ask'} class={`menu-item two-line ${s.approvals === 'ask' ? 'active' : ''}`} onClick={() => (setMenu(undefined), send({ type: 'setApprovals', mode: 'ask' }))}>
+                <IconShield size={13} />
+                <span class="menu-text">
+                  <span class="menu-label">Ask before acting</span>
+                  <span class="menu-desc">You approve commands, file edits and tool calls</span>
+                </span>
+              </button>
+              <button type="button" role="menuitemradio" aria-checked={s.approvals === 'auto'} class={`menu-item two-line ${s.approvals === 'auto' ? 'active' : ''}`} onClick={() => (setMenu(undefined), send({ type: 'setApprovals', mode: 'auto' }))}>
+                <IconZap size={13} />
+                <span class="menu-text">
+                  <span class="menu-label">Auto</span>
+                  <span class="menu-desc">Proceeds without asking for permission</span>
+                </span>
+              </button>
+              {s.engine === 'codex' && <div class="menu-note">Codex never stops to ask here; its sandbox setting limits what it can do.</div>}
+            </div>
+          )}
+        </span>
+
+        <SessionTokens s={s} />
         <ContextMeter s={s} limit={modelInfo?.contextWindow} onOpen={() => send({ type: 'send', text: '/usage' })} />
       </div>
     </div>
+  );
+}
+
+/** Tokens used by the open session so far, always in view; opens the usage panel. */
+function SessionTokens({ s }: { s: ViewState }) {
+  const u = s.sessionUsage?.usage;
+  if (!u || !s.sessionId) return null;
+  const total = tokensAll(u);
+  if (!total) return null;
+  const replies = s.sessionUsage!.messages;
+  const label = `This session: ${tokensIn(u).toLocaleString()} tokens in, ${tokensOut(u).toLocaleString()} out${u.cost ? `, ${money(u.cost)}` : ''} over ${replies} ${replies === 1 ? 'reply' : 'replies'}. Click for details.`;
+  return (
+    <button type="button" class="pill session-tokens" title={label} aria-label={label} onClick={() => send({ type: 'send', text: '/usage' })}>
+      <IconChart size={12} />
+      <span class="pill-text">
+        {compact(total)}
+        {u.cost > 0 && <span class="session-cost"> · {money(u.cost)}</span>}
+      </span>
+    </button>
   );
 }
 

@@ -7,6 +7,17 @@ updates:
     groups:
       dev-dependencies:
         patterns: ['*']
+    ignore:
+      # Must match "engines.vscode": newer typings would let the code use APIs that
+      # VS Code 1.98 does not have, and vsce refuses to package when they are ahead.
+      - dependency-name: '@types/vscode'
+      # Mocha 12 is ESM-only; the integration tests are loaded with require() by the
+      # extension host of VS Code 1.98.
+      - dependency-name: mocha
+        update-types: ['version-update:semver-major']
+      # Typings follow the Node.js version CI and the extension host run on.
+      - dependency-name: '@types/node'
+        update-types: ['version-update:semver-major']
   - package-ecosystem: github-actions
     directory: /
     schedule:

@@ -578,9 +578,17 @@ describe.skipIf(!bin)('ChatController with the real opencode engine', () => {
           }
         });
       });
-      const res = await fetch(`${url}/api/integration/deepseek/connect/key?directory=${encodeURIComponent(project.dir)}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ key: 'sk-console-login' }) });
-      if (res.status === 404) return; // this opencode has no integrations yet: nothing to check
-      expect(res.ok).toBe(true);
+      // Two opencode processes share one SQLite database, which can be busy for a moment: retry.
+      let res: Response | undefined;
+      let why = '';
+      for (let i = 0; i < 10; i++) {
+        res = await fetch(`${url}/api/integration/deepseek/connect/key?directory=${encodeURIComponent(project.dir)}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ key: 'sk-console-login' }) }).catch((e: unknown) => ((why = String(e)), undefined));
+        if (res && (res.ok || res.status === 404)) break;
+        if (res) why = `${res.status} ${await res.text().catch(() => '')}`;
+        await sleep(500);
+      }
+      if (res?.status === 404) return; // this opencode has no integrations yet: nothing to check
+      expect(res?.ok, `connecting the integration failed: ${why}`).toBe(true);
       const v = await host.until((x) => x.providers.some((p) => p.id === 'deepseek' && p.models.length > 0), 20_000, 'models of the integration sign-in');
       if (already) return;
       // Another notice may already have replaced it on screen; it was shown.

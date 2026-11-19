@@ -26,6 +26,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Webv
     this.attach(webview);
     view.onDidChangeVisibility(() => {
       if (this.view === view) void webview.postMessage({ type: 'visible', visible: view.visible } satisfies HostToWebview);
+      if (this.view === view && view.visible) this.controller?.onShown();
     });
     view.onDidDispose(() => {
       if (this.view === view) this.view = undefined;
@@ -54,6 +55,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Webv
     this.attach(webview);
     panel.onDidChangeViewState(() => {
       if (this.panel === panel) void webview.postMessage({ type: 'visible', visible: panel.visible } satisfies HostToWebview);
+      if (this.panel === panel && panel.visible) this.controller?.onShown();
     });
     panel.onDidDispose(() => {
       if (this.panel === panel) this.panel = undefined;

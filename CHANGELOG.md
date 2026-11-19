@@ -12,6 +12,7 @@
 - **Explain Selection** and **Fix Selection** in the editor's context menu, and **Fix with OpenCode Hub** in the lightbulb on errors and warnings (`opencodeHub.editor.quickFix`).
 - A **Get Started** walkthrough (*OpenCode Hub: Get Started*).
 - **The open file is one click away**, like Copilot's current file: a dashed chip above the message box shows the file you are editing (or its selected lines) and adds it as context when clicked.
+- **Every Claude model can be picked in Claude Code.** After the list the CLI reports for your account come the model families it left out (Fable, Opus, Sonnet, Haiku) and **Opus Plan Mode**. **Add a model by name…** in the model picker (Claude Code and Codex) adds any other model the CLI accepts, such as an earlier version.
 - The output of `/help` and `/doctor` is a card with a **close button**.
 - **The chat shows who you are talking to.** A strip along the top of the chat, the message box's border and a dot under the companion take the colour of the model's maker: orange for Claude, green for OpenAI, blue for Gemini, purple for Copilot, grey for local models. `opencodeHub.chat.providerColors` turns it off.
 
@@ -26,6 +27,8 @@
 
 ### Fixed
 
+- **Claude Code and Codex: the model list now follows your account.** After signing in with a subscription, the list could stay as it was before the sign-in: it was fetched once and kept for ten minutes, and right after a sign-in the CLI itself may not know the plan yet. The list is now fetched again after a sign-in (twice, a few seconds apart), after the first reply, and in the background whenever it is more than a minute old. A sign-in, sign-out or account switch made outside the chat (in a terminal, or by signing in again while signed in) is noticed when the window gets the focus back.
+- Extra models in `opencodeHub.claudeCode.models` / `opencodeHub.codex.models` appear as soon as the setting changes, not after a restart.
 - **opencode: models from an OpenCode Console sign-in (and other sign-ins of newer opencode CLIs) now show up.** Newer opencode keeps those sign-ins as "integrations" in its database, and lists their models only through its newer API; the chat read only the older list and the older `auth.json`, so it showed no models at all after such a sign-in. It now reads both lists and notices sign-ins in both places.
 - **opencode: models from a subscription signed in in a terminal now appear by themselves.** After `opencode auth login` (ChatGPT Plus/Pro, GitHub Copilot or an API key), the running opencode server kept its old provider list until the engine was restarted, so the new models never showed up. The extension now notices the sign-in (or sign-out), has opencode reload its providers, and says which provider connected and how many models it brought.
 - Fields the extension cleared (no session, no open file, a notice gone) could stay on screen, because VS Code's JSON transport to the chat view drops `undefined`. They are now sent as `null` and cleared in the view.

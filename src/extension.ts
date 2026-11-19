@@ -387,8 +387,13 @@ export async function activate(context: vscode.ExtensionContext): Promise<Openco
       const providers = e.affectsConfiguration(`${SECTION}.providers`);
       if (providers || e.affectsConfiguration(`${SECTION}.avatar`) || e.affectsConfiguration(`${SECTION}.chat`) || e.affectsConfiguration(`${SECTION}.approvals`)) controller.onConfigChanged(providers);
       if (e.affectsConfiguration(`${SECTION}.claudeCode.auth`) || e.affectsConfiguration(`${SECTION}.codex.auth`)) controller.onAuthConfigChanged();
+      if (e.affectsConfiguration(`${SECTION}.claudeCode.models`) || e.affectsConfiguration(`${SECTION}.codex.models`)) controller.onModelsConfigChanged();
     }),
     vscode.workspace.onDidGrantWorkspaceTrust(() => void controller.onTrustChanged()),
+    // Back from the browser or a terminal: a sign-in may have happened there.
+    vscode.window.onDidChangeWindowState((state) => {
+      if (state.focused && view.visible) controller.onShown();
+    }),
     {
       dispose: () => {
         controller.dispose();

@@ -133,6 +133,8 @@ export type WebviewToHost =
   | { type: 'dismissMessage'; id: string }
   /** Attach the file open in the editor, or its selected lines. */
   | { type: 'addActiveFile' }
+  /** Add a model by name (Claude Code, Codex). */
+  | { type: 'addModel' }
   /** Open the feedback form. */
   | { type: 'openFeedback'; kind?: FeedbackKind }
   /** Open a pre-filled GitHub issue in the browser. */

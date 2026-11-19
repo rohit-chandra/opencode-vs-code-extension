@@ -506,7 +506,7 @@
             "type": "string"
           },
           "default": [],
-          "markdownDescription": "Extra model names or aliases to offer for Claude Code, in addition to `default`, `opus`, `sonnet` and `haiku`."
+          "markdownDescription": "Extra model names or aliases to offer for Claude Code, after the list the CLI reports for your account. Any id the `claude` CLI accepts with `--model` works, for example `claude-opus-5` or `claude-sonnet-4-6`. *Add a model by name…* in the model picker adds to this list."
         },
         "opencodeHub.codex.path": {
           "type": "string",
@@ -542,7 +542,7 @@
             "type": "string"
           },
           "default": [],
-          "markdownDescription": "Model names to offer for Codex, in addition to the default from `~/.codex/config.toml`."
+          "markdownDescription": "Extra model names to offer for Codex, after the list the CLI reports for your account. *Add a model by name…* in the model picker adds to this list."
         },
         "opencodeHub.providers": {
           "type": "array",

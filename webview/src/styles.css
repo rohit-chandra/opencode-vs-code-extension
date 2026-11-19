@@ -1870,3 +1870,14 @@ kbd {
   border-color: var(--oh-provider, var(--oh-accent));
   color: var(--vscode-foreground);
 }
+
+/* Model picker: add a model the CLI's own list leaves out */
+.add-model {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+.add-model span {
+  flex: 1 1 14em;
+}

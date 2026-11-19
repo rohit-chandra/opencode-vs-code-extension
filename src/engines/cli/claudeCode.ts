@@ -7,6 +7,7 @@ import { LocalEngine } from '../../core/localEngine';
 import type { Turn } from '../../core/localEngine';
 import { findExecutable, runCapture, terminalCommand } from '../../core/process';
 import type { AuthMode, AuthStatus, EngineCapabilities, McpServerInfo, ModelInfo, ModelRef, PromptInput, ProviderInfo, SlashCommand } from '../../shared/types';
+import { FreshList } from './freshList';
 import { claudeInitInfo, claudeModelInfo } from './modelDiscovery';
 import { apiKeySecret, authMode, claudeEnv, parseClaudeAuthStatus, shellExe } from './auth';
 import { APPROVER_SERVER, APPROVER_TOOL, ClaudeApprover } from './claudeApprover';
@@ -22,8 +23,25 @@ interface ClaudeState {
 type McpDefs = Record<string, { command?: string; args?: string[]; url?: string; type?: string; [k: string]: unknown }>;
 
 /** Used only when the CLI cannot report the account's models. */
-const FALLBACK_MODELS = ['default', 'fable', 'opus', 'sonnet', 'haiku'];
-const MODEL_CACHE_MS = 10 * 60_000;
+/** The model families Claude Code always has an alias for (it resolves each to the newest version). */
+const FAMILY_ALIASES = ['fable', 'opus', 'sonnet', 'haiku'];
+
+/**
+ * Models Claude Code accepts with `--model` but leaves out of the list it reports for some
+ * accounts. They are offered after the account's own list, so every Claude model family can
+ * be picked; one that the plan does not include answers with Anthropic's own message.
+ */
+function moreModels(listed: ModelInfo[], reported: boolean): ModelInfo[] {
+  const has = (id: string) => listed.some((m) => m.modelId === id);
+  const cap = (id: string) => id.charAt(0).toUpperCase() + id.slice(1);
+  const out: ModelInfo[] = [];
+  for (const id of FAMILY_ALIASES) {
+    // When the CLI reported nothing at all (an older CLI), these are simply the standard aliases.
+    if (!has(id)) out.push({ providerId: 'claude-code', modelId: id, name: `${cap(id)} (latest)`, description: reported ? 'Not in the list Claude Code reports for your account. It may need a higher plan or usage credits' : undefined, supportsImages: true, supportsTools: true });
+  }
+  if (!has('opusplan')) out.push({ providerId: 'claude-code', modelId: 'opusplan', name: 'Opus Plan Mode', description: 'Opus while planning, Sonnet for the rest', supportsImages: true, supportsTools: true });
+  return out;
+}
 
 /**
  * Claude Code engine: drives the user's own `claude` CLI in print mode with stream-json.
@@ -49,7 +67,8 @@ export class ClaudeCodeEngine extends LocalEngine {
   private exe: string | undefined;
   private stateFile: StateFile<ClaudeState>;
   private approver: ClaudeApprover;
-  private modelCache: { at: number; mode: string; models: ModelInfo[] } | undefined;
+  /** The account's models as the CLI reports them; kept fresh in the background (see FreshList). */
+  private models = new FreshList<ModelInfo[]>(() => this.fetchAccountModels(), { isEmpty: (m) => m.length === 0, onChange: () => this.emit({ type: 'catalog.changed' }) });
   /** Tools the user chose "Always allow" for, per session (until VS Code restarts). */
   private alwaysAllowed = new Map<string, Set<string>>();
 
@@ -95,7 +114,7 @@ export class ClaudeCodeEngine extends LocalEngine {
   };
 
   protected async checkAvailability(): Promise<{ ok: boolean; detail?: string; version?: string }> {
-    this.modelCache = undefined;
+    this.models.invalidate();
     this.exe = await findExecutable('claude', this.ctx.config<string>('claudeCode.path', ''), this.env());
     if (!this.exe) {
       return { ok: false, detail: 'Claude Code CLI not found. Install it (npm i -g @anthropic-ai/claude-code) or set "opencodeHub.claudeCode.path", then sign in with your Claude account.' };
@@ -106,41 +125,44 @@ export class ClaudeCodeEngine extends LocalEngine {
 
   /** Forget the cached model list (after signing in, or switching between account and API key). */
   invalidateModels(): void {
-    this.modelCache = undefined;
+    this.models.invalidate();
   }
 
   /** The models the signed-in account can use, with their real names (e.g. "Opus 5.5"), as the CLI reports them. */
-  private async accountModels(): Promise<ModelInfo[]> {
-    const mode = this.account.mode();
-    const cached = this.modelCache;
-    if (cached && cached.mode === mode && Date.now() - cached.at < (cached.models.length ? MODEL_CACHE_MS : 30_000)) return cached.models;
-    let models: ModelInfo[] = [];
-    if (this.exe) {
-      const env = await this.runEnv().catch(() => undefined);
-      const info = env ? await claudeInitInfo(this.exe, env, this.ctx.cwd()) : undefined;
-      models = (info?.models ?? []).map(claudeModelInfo);
-      if (info?.commands.length) {
-        const state = await this.stateFile.read();
-        if (state.slashCommands.length === 0) {
-          await this.stateFile.update({ slashCommands: info.commands });
-          this.emit({ type: 'catalog.changed' });
-        }
+  private accountModels(): Promise<ModelInfo[]> {
+    return this.models.get(this.account.mode());
+  }
+
+  private async fetchAccountModels(): Promise<ModelInfo[]> {
+    if (!this.exe) return [];
+    const env = await this.runEnv().catch(() => undefined);
+    const info = env ? await claudeInitInfo(this.exe, env, this.ctx.cwd()) : undefined;
+    const models: ModelInfo[] = [];
+    for (const m of (info?.models ?? []).map(claudeModelInfo)) if (!models.some((x) => x.modelId === m.modelId)) models.push(m);
+    if (info?.commands.length) {
+      const state = await this.stateFile.read();
+      if (state.slashCommands.length === 0) {
+        await this.stateFile.update({ slashCommands: info.commands });
+        this.emit({ type: 'catalog.changed' });
       }
-      if (!models.length) this.ctx.log.warn('Claude Code did not report its models; showing the standard aliases.');
     }
-    this.modelCache = { at: Date.now(), mode, models };
+    if (models.length) this.ctx.log.info(`Claude Code reports ${models.length} models for this account: ${models.map((m) => m.modelId).join(', ')}`);
+    else this.ctx.log.warn('Claude Code did not report its models; showing the standard aliases.');
     return models;
   }
 
   async listProviders(): Promise<ProviderInfo[]> {
     const extra = this.ctx.config<string[]>('claudeCode.models', []);
-    let models = await this.accountModels();
-    if (!models.length) models = FALLBACK_MODELS.map((id) => ({ providerId: 'claude-code', modelId: id, name: id === 'default' ? 'Default (from Claude Code settings)' : id.charAt(0).toUpperCase() + id.slice(1), supportsImages: true, supportsTools: true }));
+    let models = [...(await this.accountModels())];
+    const reported = models.length > 0;
+    if (!reported) models = [{ providerId: 'claude-code', modelId: 'default', name: 'Default (from Claude Code settings)', supportsImages: true, supportsTools: true }];
+    models.push(...moreModels(models, reported));
     for (const id of Array.isArray(extra) ? extra : []) {
-      if (typeof id === 'string' && !models.some((m) => m.modelId === id || m.resolvedId === id)) models = [...models, { providerId: 'claude-code', modelId: id, name: id, supportsImages: true, supportsTools: true }];
+      if (typeof id === 'string' && id.trim() && !models.some((m) => m.modelId === id.trim() || m.resolvedId === id.trim())) models.push({ providerId: 'claude-code', modelId: id.trim(), name: id.trim(), description: 'Added by you', supportsImages: true, supportsTools: true });
     }
     return [{ id: 'claude-code', name: 'Claude Code', connected: true, models }];
   }
+
 
   override async defaultModel(): Promise<ModelRef | undefined> {
     return { providerId: 'claude-code', modelId: 'default' };
@@ -286,6 +308,8 @@ export class ClaudeCodeEngine extends LocalEngine {
         this.emit({ type: 'catalog.changed' });
         this.emit({ type: 'mcp.changed' });
       }
+      // The CLI has just talked to Anthropic and knows the account's plan now: check the model list again.
+      this.models.refresh(this.account.mode(), 20_000);
       if (translator.error) throw new Error(translator.error);
       if (!translator.finished) {
         throw new Error(`Claude Code exited (code ${code ?? '?'}) before finishing.${stderr.trim() ? ' ' + stderr.trim().slice(-500) : ''}${/login|auth|credential|api key/i.test(stderr) ? ' Use /login to sign in with your Claude account.' : ''}`);

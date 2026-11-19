@@ -221,6 +221,14 @@ export function ModelsPanel({ s, onClose }: { s: ViewState; onClose: () => void 
         </section>
       ))}
       {hidden > 0 && <p class="sheet-foot">{hidden} more not shown. Type to search.</p>}
+      {(s.engine === 'claude-code' || s.engine === 'codex') && (
+        <div class="sheet-foot add-model">
+          <span>This is the list {s.engine === 'claude-code' ? 'Claude Code' : 'Codex'} reports for your account. Missing one, such as an earlier version?</span>
+          <button type="button" class="btn small" onClick={() => (send({ type: 'addModel' }), onClose())}>
+            Add a model by name…
+          </button>
+        </div>
+      )}
     </Sheet>
   );
 }

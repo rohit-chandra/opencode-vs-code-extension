@@ -146,6 +146,35 @@ describe.skipIf(!claudeBin)('Claude Code engine (real `claude` CLI + mock Anthro
     expect(opus.resolvedId).toMatch(/^claude-opus-/);
     expect(models.every((m) => !/\$/.test(m.description ?? ''))).toBe(true);
     expect(models.length).toBeGreaterThanOrEqual(3);
+    // Nothing twice, and Opus Plan Mode (an alias the CLI takes but does not list) is offered too.
+    expect(new Set(models.map((m) => m.modelId)).size).toBe(models.length);
+    expect(models.find((m) => m.modelId === 'opusplan')).toMatchObject({ name: 'Opus Plan Mode' });
+    for (const family of ['fable', 'opus', 'sonnet', 'haiku']) expect(models.some((m) => m.modelId === family), family).toBe(true);
+  });
+
+  it('runs a model the CLI does not list: Opus Plan Mode and a model added by name', async () => {
+    const rec = record(engine);
+    const session = await engine.createSession();
+    const sent = () => mock.log.filter((l) => l.path.endsWith('/messages')).map((l) => String(l.body.model));
+    let before = sent().length;
+    await engine.sendPrompt(session.id, { text: 'plan mode alias', attachments: [], model: { providerId: 'claude-code', modelId: 'opusplan' } });
+    await rec.waitIdle(session.id, 90_000);
+    expect(rec.messages(session.id).at(-1)!.error).toBeUndefined();
+    // Outside plan mode the alias runs on Sonnet.
+    expect(sent().slice(before).some((m) => /^claude-sonnet-/.test(m))).toBe(true);
+
+    ctx.settings['claudeCode.models'] = ['claude-opus-5'];
+    try {
+      const [provider] = await engine.listProviders();
+      expect(provider.models.at(-1)).toMatchObject({ modelId: 'claude-opus-5', description: 'Added by you' });
+      before = sent().length;
+      await engine.sendPrompt(session.id, { text: 'an earlier version', attachments: [], model: { providerId: 'claude-code', modelId: 'claude-opus-5' } });
+      await rec.waitIdle(session.id, 90_000);
+      expect(rec.messages(session.id).at(-1)!.error).toBeUndefined();
+      expect(sent().slice(before)).toContain('claude-opus-5');
+    } finally {
+      delete ctx.settings['claudeCode.models'];
+    }
   });
 
   it('asks before a tool runs, in the chat: allow, always allow, deny', async () => {

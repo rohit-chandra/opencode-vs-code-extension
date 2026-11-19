@@ -80,6 +80,11 @@ export class ChatController {
   /** Engine whose sign-in was started in a terminal and is being waited for. */
   private signInPending: EngineId | undefined;
   private signInTimer: ReturnType<typeof setTimeout> | undefined;
+  /** Who each account engine was signed in as when last checked, to notice a change. */
+  private authIdentities = new Map<EngineId, string>();
+  private lastAuthCheck = 0;
+  /** How long after a sign-in the models are listed a second time (the tests shorten it). */
+  relistAgainMs = 20_000;
   /** Engine whose providers `state.providers` holds, to tell a new connection from an engine switch. */
   private catalogEngine: EngineId | undefined;
   /** Renderer the webview's companion is using, once it has mounted. */
@@ -317,7 +322,47 @@ export class ChatController {
     const status = await account.status().catch((e): AuthStatus => (this.host.log.warn(`auth status: ${errorMessage(e)}`), { engine: engine.id, mode: account.mode(), signedIn: undefined }));
     if (engine !== this.engine) return undefined;
     this.set({ auth: { ...status, pending: this.signInPending === engine.id || undefined } });
+    // Another account, plan or way of paying means another list of models. This also catches a
+    // sign-in or sign-out done outside the chat (in a terminal, or in the CLI itself).
+    if (status.signedIn !== undefined) {
+      const identity = authIdentity(status);
+      const before = this.authIdentities.get(engine.id);
+      this.authIdentities.set(engine.id, identity);
+      if (before !== undefined && before !== identity) {
+        this.host.log.info(`${ENGINE_LABELS[engine.id]}: sign-in changed (${status.signedIn ? status.label ?? 'signed in' : 'signed out'}); listing models again`);
+        this.relistModels();
+      }
+    }
     return status;
+  }
+
+  /**
+   * Fetch the account's models again, now and once more a little later: right after a sign-in
+   * the CLI may not know the plan yet, and would report the generic list.
+   */
+  private relistModels(): void {
+    this.invalidateModels();
+    this.debounce('catalog', 300, () => void this.refreshCatalog());
+    this.debounce('catalog-again', this.relistAgainMs, () => {
+      this.invalidateModels();
+      void this.refreshCatalog();
+    });
+  }
+
+  /**
+   * The chat came into view, or the window got the focus back (for example after signing in
+   * in the browser or a terminal): check the sign-in again, at most every few seconds.
+   */
+  onShown(): void {
+    if (!this.engine.account || this.engine.status().state !== 'ready' || this.signInPending) return;
+    if (Date.now() - this.lastAuthCheck < 10_000) return;
+    this.lastAuthCheck = Date.now();
+    void this.refreshAuth();
+  }
+
+  /** The list of extra models in settings changed. */
+  onModelsConfigChanged(): void {
+    this.debounce('catalog', 200, () => void this.refreshCatalog());
   }
 
   private pushUsage(): void {
@@ -1117,6 +1162,9 @@ export class ChatController {
   private waitForSignIn(engineId: EngineId): void {
     this.stopSignInWait();
     this.signInPending = engineId;
+    // Signing in again while signed in (another account, an upgraded plan): the first check
+    // would still see the old account, so wait for a change instead of stopping at once.
+    const startedAs = this.state.auth?.signedIn && this.state.auth.billing !== 'apiKey' ? authIdentity(this.state.auth) : undefined;
     if (this.state.auth) this.set({ auth: { ...this.state.auth, pending: true } });
     const started = Date.now();
     const tick = async () => {
@@ -1124,12 +1172,14 @@ export class ChatController {
       if (this.signInPending !== engineId || this.state.engine !== engineId) return;
       const status = await this.refreshAuth();
       if (this.signInPending !== engineId) return;
-      if (status?.signedIn && status.billing !== 'apiKey') {
+      const signedIn = !!status?.signedIn && status.billing !== 'apiKey';
+      const sameAsBefore = signedIn && startedAs !== undefined && authIdentity(status!) === startedAs;
+      // The same account after two minutes: the user signed in again as themselves. Done, quietly.
+      if (signedIn && (!sameAsBefore || Date.now() - started > 120_000)) {
         this.stopSignInWait();
-        this.set({ auth: { ...status, pending: undefined } });
-        this.notify('info', `Signed in${status.label ? `: ${status.label}` : ''}.`);
-        this.invalidateModels();
-        this.debounce('catalog', 300, () => void this.refreshCatalog());
+        this.set({ auth: { ...status!, pending: undefined } });
+        if (!sameAsBefore) this.notify('info', `Signed in${status!.label ? `: ${status!.label}` : ''}.`);
+        this.relistModels();
         return;
       }
       if (Date.now() - started > 10 * 60_000) {
@@ -1141,6 +1191,7 @@ export class ChatController {
     };
     this.signInTimer = setTimeout(() => void tick(), 2500);
   }
+
 
   private stopSignInWait(): void {
     if (this.signInTimer) clearTimeout(this.signInTimer);
@@ -1166,6 +1217,28 @@ export class ChatController {
     if (!this.engine.account) return;
     this.invalidateModels();
     this.debounce('auth', 200, () => void Promise.all([this.refreshAuth(), this.refreshCatalog()]));
+  }
+
+  /**
+   * Add a model by its name for an engine whose CLI takes any model id (Claude Code, Codex):
+   * an older version, a preview, anything the CLI's own list leaves out.
+   */
+  async addCustomModel(): Promise<void> {
+    const engine = this.engine;
+    const setting = engine.id === 'claude-code' ? 'claudeCode.models' : engine.id === 'codex' ? 'codex.models' : undefined;
+    if (!setting) return this.manageProviders();
+    const example = engine.id === 'claude-code' ? 'for example claude-opus-5 or claude-sonnet-4-6' : 'for example gpt-5.1-codex';
+    const typed = await this.host.input({ title: `${ENGINE_LABELS[engine.id]}: add a model by name`, placeholder: `The model id or alias, ${example}`, prompt: `Passed to the ${engine.id === 'claude-code' ? 'claude' : 'codex'} CLI as --model. If your plan does not include it, the reply will say so.` });
+    const id = typed?.trim();
+    if (!id) return;
+    if (!/^[\w.:[\]/@-]{1,120}$/.test(id)) return this.notify('warn', 'A model name has no spaces: letters, digits, and - . _ : / [ ] only.');
+    const current = this.host.config<string[]>(setting, []);
+    const list = Array.isArray(current) ? current.filter((x) => typeof x === 'string') : [];
+    if (!list.includes(id)) await this.host.updateConfig(setting, [...list, id]);
+    await this.refreshCatalog();
+    const found = this.state.providers.flatMap((p) => p.models).find((m) => m.modelId === id || m.resolvedId === id);
+    if (found) await this.setModel({ providerId: found.providerId, modelId: found.modelId });
+    this.notify('info', `${id} added. Remove it under "opencodeHub.${setting}" in settings.`);
   }
 
   /** Models depend on the account (plan) the engine is signed in with. */
@@ -1373,6 +1446,8 @@ export class ChatController {
         return this.restartEngine();
       case 'attachSession':
         return this.attachSession(msg.sessionId, msg.engine);
+      case 'addModel':
+        return this.addCustomModel();
       case 'dismissMessage':
         // Only the extension's own messages; replies from a model belong to the session.
         if (typeof msg.id === 'string' && msg.id.startsWith('local_')) this.set({ messages: this.state.messages.filter((m) => m.id !== msg.id) });
@@ -1420,6 +1495,11 @@ export class ChatController {
   activeSession(): SessionInfo | undefined {
     return this.state.sessions.find((s) => s.id === this.state.sessionId);
   }
+}
+
+/** Who is signed in and how it is paid for: a change means another list of models. */
+function authIdentity(status: AuthStatus): string {
+  return `${status.signedIn ? 'in' : 'out'}|${status.billing ?? ''}|${status.label ?? ''}`;
 }
 
 const ENGINE_ORDER: EngineId[] = ['opencode', 'claude-code', 'codex', 'vscode-lm', 'direct'];

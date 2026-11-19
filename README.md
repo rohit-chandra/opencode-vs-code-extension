@@ -148,7 +148,9 @@ For a local server such as Ollama or LM Studio, start the server first; no key i
 2. In the chat: `/engine`, then **Claude Code**.
 3. Click **Sign in with Claude**. A terminal runs `claude auth login --claudeai` and your browser opens; sign in with your Claude account. The chat notices when you are done.
 
-The model picker lists the models your Claude plan includes, as Claude Code reports them for your account (for example Fable 5.2, Opus 5.5, Sonnet 5.5, Haiku 5.5). Extra model ids can be added under `opencodeHub.claudeCode.models`.
+The model picker lists the models your Claude plan includes, as Claude Code reports them for your account (for example Fable 5.2, Opus 5.5, Sonnet 5.5, Haiku 5.5). The list follows your account: it is fetched again after you sign in, after the first reply, and whenever the window gets the focus back after a sign-in elsewhere.
+
+After that list come the entries Claude Code accepts but may leave out for your account: any of the Fable, Opus, Sonnet and Haiku families that is missing, and **Opus Plan Mode** (Opus while planning, Sonnet for the rest). For anything else, such as an earlier version, click **Add a model by name…** at the bottom of the picker and type its id (for example `claude-opus-5`); it is kept in `opencodeHub.claudeCode.models`. If your plan does not include a model, Claude's reply says so.
 
 Your Claude Pro or Max plan is used, not per-token API billing. In this mode the extension also hides `ANTHROPIC_API_KEY` from the CLI, so a key set in your shell for other tools cannot quietly take over. To use an API key instead, click **Use an API key instead** (or `/login`); the key is kept in VS Code Secret Storage. `/login` switches back at any time.
 

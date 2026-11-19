@@ -354,6 +354,37 @@ await test('the file open in the editor is one click away, like Copilot\'s curre
   await t.page.close();
 });
 
+await test('model picker: Claude Code and Codex can add a model by name', async () => {
+  const t = await open('dark', 400, 760);
+  const models = [
+    { providerId: 'claude-code', modelId: 'default', name: 'Default (Opus 5.5)' },
+    { providerId: 'claude-code', modelId: 'opus', name: 'Opus 5.5' },
+    { providerId: 'claude-code', modelId: 'fable', name: 'Fable 5.2' },
+    { providerId: 'claude-code', modelId: 'sonnet', name: 'Sonnet 5.5' },
+    { providerId: 'claude-code', modelId: 'haiku', name: 'Haiku 5.5' },
+    { providerId: 'claude-code', modelId: 'opusplan', name: 'Opus Plan Mode', description: 'Opus while planning, Sonnet for the rest' },
+  ];
+  await t.host({ type: 'state', state: { ...conversation, engine: 'claude-code', model: { providerId: 'claude-code', modelId: 'default' }, providers: [{ id: 'claude-code', name: 'Claude Code', connected: true, models }], recentModels: [] } });
+  await t.page.waitForSelector('.pill.model');
+  await t.page.click('.pill.model');
+  await t.page.waitForSelector('.sheet .list .row');
+  assert.deepEqual(await t.page.$$eval('.sheet .group:not(.recent) .row-title', (els) => els.map((e) => e.textContent)), models.map((m) => m.name));
+  assert.match(await t.text('.add-model'), /list Claude Code reports for your account/);
+  await new Promise((r) => setTimeout(r, 400)); // let the sheet finish sliding in
+  await t.shot('18-claude-models');
+  await t.clearPosted();
+  await t.page.click('.add-model .btn');
+  assert.deepEqual(await t.posted('addModel'), [{ type: 'addModel' }]);
+  assert.equal(await t.page.$('.sheet'), null);
+  // Engines whose list is already complete (opencode, Direct BYOK, Copilot) have no such button.
+  await t.host({ type: 'state', state: conversation });
+  await t.page.click('.pill.model');
+  await t.page.waitForSelector('.sheet .list .row');
+  assert.equal(await t.page.$('.add-model'), null);
+  assert.deepEqual(t.consoleErrors, []);
+  await t.page.close();
+});
+
 await test('permission and question prompts', async () => {
   const t = await open();
   await t.host({ type: 'state', state: { ...conversation, activity: 'busy', permissions: [{ id: 'per_1', sessionId: 'ses_1', kind: 'bash', title: 'Allow bash?', detail: 'rm -rf dist && npm run build' }], questions: [{ id: 'que_1', sessionId: 'ses_1', questions: [{ question: 'Which test runner should I set up?', options: [{ label: 'Vitest' }, { label: 'Jest' }] }] }] } });

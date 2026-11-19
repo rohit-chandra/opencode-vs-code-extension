@@ -12,6 +12,7 @@ import { codexModels } from './modelDiscovery';
 import { apiKeySecret, authMode, codexEnv, parseCodexLoginStatus, shellExe } from './auth';
 import { CodexStreamTranslator } from './codexStream';
 import { StateFile, imageBase64, promptForAgent, runJsonl } from './common';
+import { FreshList } from './freshList';
 
 interface CodexState {
   disabledMcp: string[];
@@ -39,7 +40,8 @@ export class CodexEngine extends LocalEngine {
 
   private exe: string | undefined;
   private version = '0';
-  private modelCache: { at: number; mode: string; models: ModelInfo[]; defaultName?: string } | undefined;
+  /** The account's models as the CLI reports them; kept fresh in the background (see FreshList). */
+  private modelList = new FreshList<{ models: ModelInfo[]; defaultName?: string }>(() => this.fetchAccountModels(), { isEmpty: (v) => v.models.length === 0, onChange: () => this.emit({ type: 'catalog.changed' }) });
   private stateFile: StateFile<CodexState>;
 
   constructor(ctx: EngineContext) {
@@ -79,7 +81,7 @@ export class CodexEngine extends LocalEngine {
   };
 
   protected async checkAvailability(): Promise<{ ok: boolean; detail?: string; version?: string }> {
-    this.modelCache = undefined;
+    this.modelList.invalidate();
     this.exe = await findExecutable('codex', this.ctx.config<string>('codex.path', ''), this.env());
     if (!this.exe) {
       return { ok: false, detail: 'Codex CLI not found. Install it (npm i -g @openai/codex) or set "opencodeHub.codex.path", then sign in with your ChatGPT account.' };
@@ -92,14 +94,15 @@ export class CodexEngine extends LocalEngine {
 
   /** Forget the cached model list (after signing in, or switching between account and API key). */
   invalidateModels(): void {
-    this.modelCache = undefined;
+    this.modelList.invalidate();
   }
 
   /** The models the signed-in account (ChatGPT plan or API key) can use, from `codex app-server`. */
-  private async accountModels(): Promise<{ models: ModelInfo[]; defaultName?: string }> {
-    const mode = this.account.mode();
-    const cached = this.modelCache;
-    if (cached && cached.mode === mode && Date.now() - cached.at < (cached.models.length ? 10 * 60_000 : 30_000)) return cached;
+  private accountModels(): Promise<{ models: ModelInfo[]; defaultName?: string }> {
+    return this.modelList.get(this.account.mode());
+  }
+
+  private async fetchAccountModels(): Promise<{ models: ModelInfo[]; defaultName?: string }> {
     const models: ModelInfo[] = [];
     let defaultName: string | undefined;
     if (this.exe) {
@@ -116,8 +119,7 @@ export class CodexEngine extends LocalEngine {
       }
       if (!list) this.ctx.log.warn('Codex did not report its models; set extra ones under "opencodeHub.codex.models".');
     }
-    this.modelCache = { at: Date.now(), mode, models, defaultName };
-    return this.modelCache;
+    return { models, defaultName };
   }
 
   /** Model id Codex picks for the plan when none is configured, once it has told us. */
@@ -236,6 +238,8 @@ export class CodexEngine extends LocalEngine {
       });
       if (signal.aborted) return;
       if (translator.threadId) session.meta.codexThreadId = translator.threadId;
+      // Codex has just talked to OpenAI and knows the account's plan now: check the model list again.
+      this.modelList.refresh(this.account.mode(), 20_000);
       if (translator.error) throw new Error(translator.error);
       if (!translator.finished) {
         throw new Error(`Codex exited (code ${code ?? '?'}) before finishing.${stderr.trim() ? ' ' + stderr.trim().slice(-500) : ''}${/login|auth|401/i.test(stderr) ? ' Use /login to sign in with your ChatGPT account.' : ''}`);

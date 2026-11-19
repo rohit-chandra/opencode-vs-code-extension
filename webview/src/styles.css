@@ -1856,3 +1856,17 @@ kbd {
     transition: none;
   }
 }
+
+/* The file open in the editor, offered as context with one click */
+.chip.suggest {
+  border-style: dashed;
+  background: transparent;
+  color: var(--oh-muted);
+  cursor: pointer;
+}
+.chip.suggest:hover,
+.chip.suggest:focus-visible {
+  border-style: solid;
+  border-color: var(--oh-provider, var(--oh-accent));
+  color: var(--vscode-foreground);
+}

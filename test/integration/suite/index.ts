@@ -158,6 +158,20 @@ export async function run(): Promise<void> {
         assert.equal(state().attachments.length, 0);
       });
 
+      it('offers the open file as context and attaches it with one click', async () => {
+        const file = path.join(vscode.workspace.workspaceFolders![0].uri.fsPath, 'hello.txt');
+        const editor = await vscode.window.showTextDocument(await vscode.workspace.openTextDocument(file));
+        editor.selection = new vscode.Selection(0, 0, 0, 0);
+        await until('current-file chip', () => state().activeFile?.path === file && !state().activeFile?.selection, 10_000);
+        await api.controller.handleMessage({ type: 'addActiveFile' });
+        await until('attached', () => state().attachments.some((a) => a.path === file && !a.range), 10_000);
+        editor.selection = new vscode.Selection(1, 0, 1, 6);
+        await until('selection offered', () => state().activeFile?.selection?.startLine === 2, 10_000);
+        await api.controller.handleMessage({ type: 'addActiveFile' });
+        await until('selection attached', () => state().attachments.some((a) => a.kind === 'selection' && a.range?.startLine === 2), 10_000);
+        for (const a of state().attachments) await api.controller.handleMessage({ type: 'removeAttachment', id: a.id });
+      });
+
       it('finds workspace files for @ mentions', async () => {
         const found = await vscode.workspace.findFiles('**/*hel*', null, 10);
         assert.ok(found.some((u) => u.fsPath.endsWith('hello.txt')));

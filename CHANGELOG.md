@@ -11,11 +11,13 @@
 - **Long Direct BYOK conversations keep going.** When a provider reports that the context window is full, the oldest turns are left out of the request (whole turns, so tool calls keep their results) and the chat says so. `opencodeHub.direct.maxContextTokens` sets a budget up front for local servers that cut prompts silently.
 - **Explain Selection** and **Fix Selection** in the editor's context menu, and **Fix with OpenCode Hub** in the lightbulb on errors and warnings (`opencodeHub.editor.quickFix`).
 - A **Get Started** walkthrough (*OpenCode Hub: Get Started*).
+- **The open file is one click away**, like Copilot's current file: a dashed chip above the message box shows the file you are editing (or its selected lines) and adds it as context when clicked.
 - The output of `/help` and `/doctor` is a card with a **close button**.
 - **The chat shows who you are talking to.** A strip along the top of the chat, the message box's border and a dot under the companion take the colour of the model's maker: orange for Claude, green for OpenAI, blue for Gemini, purple for Copilot, grey for local models. `opencodeHub.chat.providerColors` turns it off.
 
 ### Changed
 
+- **Subscriptions first, API keys last, everywhere.** opencode's `/providers` now opens with **Sign in with a subscription**, lists opencode's own plan sign-ins (ChatGPT Plus/Pro, GitHub Copilot, GitLab Duo, …) and runs `opencode auth login` straight at the one you pick; an API key is the last option. Connecting a provider that has a plan offers the plan before the key. The engine picker lists the engines that sign in with a plan first and Direct BYOK (API keys only) last, and the Direct BYOK menu starts with *Use a subscription instead*.
 - The model's name is no longer repeated under every reply; it is in the tooltip with the token breakdown.
 - In a typical side bar width, the session pill shows the session's cost (tokens in its tooltip) instead of hiding the cost.
 - **macOS and Linux:** the CLIs are also found where Homebrew, nvm, Volta, fnm, asdf, mise, pnpm, bun, Nix, Snap and Linuxbrew install them, so an editor started from the Dock or a desktop launcher (without your shell's `PATH`) finds them. The CLI's own folder is put on its `PATH` when it is started, so npm-installed CLIs that run on an nvm or Volta Node start too. Sign-in terminals use the full path when the plain command would not be found.
@@ -24,7 +26,9 @@
 
 ### Fixed
 
+- **opencode: models from an OpenCode Console sign-in (and other sign-ins of newer opencode CLIs) now show up.** Newer opencode keeps those sign-ins as "integrations" in its database, and lists their models only through its newer API; the chat read only the older list and the older `auth.json`, so it showed no models at all after such a sign-in. It now reads both lists and notices sign-ins in both places.
 - **opencode: models from a subscription signed in in a terminal now appear by themselves.** After `opencode auth login` (ChatGPT Plus/Pro, GitHub Copilot or an API key), the running opencode server kept its old provider list until the engine was restarted, so the new models never showed up. The extension now notices the sign-in (or sign-out), has opencode reload its providers, and says which provider connected and how many models it brought.
+- Fields the extension cleared (no session, no open file, a notice gone) could stay on screen, because VS Code's JSON transport to the chat view drops `undefined`. They are now sent as `null` and cleared in the view.
 - Text attachments with no file on disk (a file dropped from outside VS Code) reached the opencode engine as a path it could not read.
 
 ### For maintainers

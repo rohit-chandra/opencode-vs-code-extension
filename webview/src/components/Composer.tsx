@@ -4,13 +4,14 @@ import { providerBrand } from '../../../src/shared/providerColors';
 import type { ViewState } from '../../../src/shared/protocol';
 import { ENGINE_LABELS } from '../../../src/shared/types';
 import type { Attachment, EngineId, SlashCommand } from '../../../src/shared/types';
-import { IconChart, IconChevron, IconClip, IconClose, IconFile, IconImage, IconSend, IconShield, IconStop, IconZap } from '../icons';
+import { IconChart, IconChevron, IconClip, IconClose, IconFile, IconImage, IconSend, IconShield, IconStop, IconZap, IconPlus } from '../icons';
 import { compact, money, tokensAll, tokensIn, tokensOut } from '../format';
 import { send, store } from '../store';
 
 type Popup = { kind: 'slash'; items: SlashCommand[]; index: number } | { kind: 'file'; items: { path: string; relative: string }[]; index: number; start: number; query: string } | undefined;
 
-const ENGINE_ORDER: EngineId[] = ['opencode', 'direct', 'claude-code', 'codex', 'vscode-lm'];
+// Subscription sign-ins first; API keys (Direct BYOK) last.
+const ENGINE_ORDER: EngineId[] = ['opencode', 'claude-code', 'codex', 'vscode-lm', 'direct'];
 
 function fileToAttachment(file: File): Promise<Attachment | undefined> {
   return new Promise((resolve) => {
@@ -46,6 +47,10 @@ export function droppedPaths(dt: DataTransfer): string[] {
 
 export function Composer({ s, onOpenPanel }: { s: ViewState; onOpenPanel: (p: 'models') => void }) {
   const brand = s.providerColors ? providerBrand(s.engine, s.model) : undefined;
+  // The file open in the editor, one click away (like Copilot's "current file"), unless it is already attached.
+  const af = s.activeFile;
+  const activeLabel = af ? `${af.name.split('/').pop()}${af.selection ? `:${af.selection.startLine}-${af.selection.endLine}` : ''}` : '';
+  const suggestFile = !!af && s.trusted && !s.attachments.some((a) => a.path === af.path && (af.selection ? a.range?.startLine === af.selection.startLine && a.range?.endLine === af.selection.endLine : !a.range));
   const [text, setText] = useState('');
   const [popup, setPopup] = useState<Popup>();
   const [menu, setMenu] = useState<'engine' | 'agent' | 'approvals' | undefined>();
@@ -196,8 +201,21 @@ export function Composer({ s, onOpenPanel }: { s: ViewState; onOpenPanel: (p: 'm
         </div>
       )}
 
-      {s.attachments.length > 0 && (
+      {(s.attachments.length > 0 || suggestFile) && (
         <div class="chips attachments">
+          {suggestFile && (
+            <button
+              type="button"
+              class="chip suggest"
+              title={`Add ${s.activeFile!.selection ? 'the selected lines of ' : ''}${s.activeFile!.path} as context`}
+              aria-label={`Add ${activeLabel} as context`}
+              onClick={() => send({ type: 'addActiveFile' })}
+            >
+              <IconPlus size={11} />
+              <IconFile size={13} />
+              <span>{activeLabel}</span>
+            </button>
+          )}
           {s.attachments.map((a) => (
             <span class="chip" key={a.id} title={a.path ?? a.name}>
               {a.kind === 'image' && a.dataUrl ? <img class="thumb" src={a.dataUrl} alt="" /> : a.kind === 'image' ? <IconImage size={13} /> : <IconFile size={13} />}
@@ -264,7 +282,7 @@ export function Composer({ s, onOpenPanel }: { s: ViewState; onOpenPanel: (p: 'm
               })}
               <div class="menu-sep" />
               <button type="button" role="menuitem" class="menu-item" onClick={() => (setMenu(undefined), send({ type: 'manageProviders' }))}>
-                <span class="menu-label">Providers and API keys…</span>
+                <span class="menu-label">Sign in, providers and API keys…</span>
               </button>
             </div>
           )}

@@ -50,6 +50,8 @@ export interface ViewState {
   avatar: { enabled: boolean; style: AvatarStyle };
   /** Tint the chat's frame with the colour of the model's provider (Claude orange, OpenAI green, …). */
   providerColors: boolean;
+  /** The file open in the editor (and its selected lines), offered as context with one click. */
+  activeFile: { path: string; name: string; selection?: { startLine: number; endLine: number } } | undefined;
   /** Text scale of the chat (1 = VS Code's font size). */
   zoom: number;
   trusted: boolean;
@@ -129,6 +131,8 @@ export type WebviewToHost =
   | { type: 'attachSession'; sessionId: string; engine?: EngineId }
   /** Close a message the extension wrote itself (/help, /doctor). */
   | { type: 'dismissMessage'; id: string }
+  /** Attach the file open in the editor, or its selected lines. */
+  | { type: 'addActiveFile' }
   /** Open the feedback form. */
   | { type: 'openFeedback'; kind?: FeedbackKind }
   /** Open a pre-filled GitHub issue in the browser. */
@@ -137,3 +141,15 @@ export type WebviewToHost =
   /** Sent once the companion is on screen; tells the host which renderer the webview ended up with. */
   | { type: 'avatarReady'; renderer: 'webgl' | '2d' }
   | { type: 'log'; level: 'info' | 'warn' | 'error'; message: string };
+
+/**
+ * Webview messages travel as JSON, which drops keys whose value is `undefined`. A patch that
+ * clears a field (no session, no open file, no notice) would then never arrive, and the chat
+ * would keep showing the old value. Cleared fields are sent as `null`; the webview's store
+ * turns them back into `undefined`.
+ */
+export function clearedAsNull<T extends object>(patch: T): T {
+  const out: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(patch)) out[k] = v === undefined ? null : v;
+  return out as T;
+}

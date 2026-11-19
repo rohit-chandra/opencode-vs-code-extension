@@ -77,6 +77,24 @@ export async function activate(context: vscode.ExtensionContext): Promise<Openco
   const ledger = new UsageLedger(context.globalState);
   const view = new ChatViewProvider(context.extensionUri, log);
 
+  /**
+   * The file the user is working in. Opening the chat in an editor tab, or clicking into it,
+   * leaves no active text editor, so the last file editor that is still visible counts.
+   */
+  let lastEditor: vscode.TextEditor | undefined;
+  const isFileEditor = (e: vscode.TextEditor | undefined): e is vscode.TextEditor => !!e && e.document.uri.scheme === 'file';
+  const activeEditor = (): vscode.TextEditor | undefined => {
+    const current = vscode.window.activeTextEditor;
+    if (isFileEditor(current)) return current;
+    return lastEditor && vscode.window.visibleTextEditors.includes(lastEditor) ? lastEditor : vscode.window.visibleTextEditors.find(isFileEditor);
+  };
+  const selectionAttachmentOf = (editor: vscode.TextEditor) => {
+    const doc = editor.document;
+    const sel = editor.selection;
+    const endLine = sel.end.character === 0 && sel.end.line > sel.start.line ? sel.end.line : sel.end.line + 1;
+    return { id: newId('att'), kind: 'selection' as const, name: `${vscode.workspace.asRelativePath(doc.uri, false)}:${sel.start.line + 1}-${endLine}`, mime: 'text/plain', path: doc.uri.fsPath, text: doc.getText(sel), range: { startLine: sel.start.line + 1, endLine } };
+  };
+
   const host: ControllerHost = {
     log,
     post: (m) => view.post(m),
@@ -161,6 +179,12 @@ export async function activate(context: vscode.ExtensionContext): Promise<Openco
       arch: process.arch,
       osRelease: os.release(),
     }),
+    activeFileAttachment: () => {
+      const editor = activeEditor();
+      if (!editor) return undefined;
+      if (!editor.selection.isEmpty) return selectionAttachmentOf(editor);
+      return { id: '', kind: 'file' as const, name: vscode.workspace.asRelativePath(editor.document.uri, false), mime: 'text/plain', path: editor.document.uri.fsPath };
+    },
     repository: () => {
       const pkg = context.extension.packageJSON as { repository?: string | { url?: string } };
       return repoSlug(typeof pkg.repository === 'string' ? pkg.repository : pkg.repository?.url);
@@ -169,6 +193,27 @@ export async function activate(context: vscode.ExtensionContext): Promise<Openco
 
   const controller = new ChatController(engines, ledger, host);
   view.controller = controller;
+
+  // The open file, offered in the chat as a one-click chip (like Copilot's "current file").
+  let fileTimer: ReturnType<typeof setTimeout> | undefined;
+  const pushActiveFile = () => {
+    if (fileTimer) clearTimeout(fileTimer);
+    fileTimer = setTimeout(() => {
+      const editor = activeEditor();
+      if (isFileEditor(vscode.window.activeTextEditor)) lastEditor = vscode.window.activeTextEditor;
+      if (!editor) return controller.setActiveFile(undefined);
+      const sel = editor.selection;
+      const endLine = sel.end.character === 0 && sel.end.line > sel.start.line ? sel.end.line : sel.end.line + 1;
+      controller.setActiveFile({ path: editor.document.uri.fsPath, name: vscode.workspace.asRelativePath(editor.document.uri, false), selection: sel.isEmpty ? undefined : { startLine: sel.start.line + 1, endLine } });
+    }, 120);
+  };
+  pushActiveFile();
+  context.subscriptions.push(
+    vscode.window.onDidChangeActiveTextEditor(pushActiveFile),
+    vscode.window.onDidChangeVisibleTextEditors(pushActiveFile),
+    vscode.window.onDidChangeTextEditorSelection(pushActiveFile),
+    { dispose: () => fileTimer && clearTimeout(fileTimer) },
+  );
 
   // Status bar: tokens of the current session.
   const statusBar = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 90);

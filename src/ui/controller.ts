@@ -17,7 +17,7 @@ import type { AvatarStyle, HostToWebview, ViewState, WebviewToHost } from '../sh
 import { applyMessageEvent, messageText } from '../shared/reducer';
 import { ENGINE_LABELS } from '../shared/types';
 import { approvalMode } from '../shared/types';
-import type { ApprovalMode, Attachment, AuthStatus, ChatMessage, EngineEvent, EngineId, ModelRef, SessionInfo } from '../shared/types';
+import type { ApprovalMode, Attachment, AuthStatus, ChatMessage, EngineEvent, EngineId, ModelRef, ProviderInfo, SessionInfo } from '../shared/types';
 
 export interface PickItem<T> {
   label: string;
@@ -56,6 +56,8 @@ export interface ControllerHost {
   moveView(to: 'left' | 'right' | 'editor'): Promise<void>;
   /** Versions and platform, for `/doctor` and the diagnostics a feedback report can include. */
   environment(): EnvironmentInfo;
+  /** The editor's file, or its selected lines when there is a selection, as an attachment. */
+  activeFileAttachment(): Attachment | undefined;
   /** `owner/repo` on GitHub where feedback is filed, from the extension's package.json. */
   repository(): string | undefined;
 }
@@ -111,6 +113,7 @@ export class ChatController {
       avatar: { enabled: host.config<boolean>('avatar.enabled', true), style: avatarStyle(host.config<string>('avatar.style', 'buddy')) },
       zoom: clampZoom(host.config<number>('chat.zoom', 1)),
       providerColors: host.config<boolean>('chat.providerColors', true) !== false,
+      activeFile: undefined,
       trusted: host.workspaceTrusted(),
       canRetry: false,
       recentModels: [],
@@ -500,7 +503,8 @@ export class ChatController {
 
   async pickEngine(): Promise<void> {
     const picked = await this.host.pick<EngineId>(
-      this.state.engines.map((s) => ({
+      // Engines that sign in with a subscription first; API keys (Direct BYOK) last.
+      [...this.state.engines].sort((a, b) => ENGINE_ORDER.indexOf(a.engine) - ENGINE_ORDER.indexOf(b.engine)).map((s) => ({
         label: `${s.engine === this.state.engine ? '$(check) ' : ''}${ENGINE_LABELS[s.engine]}`,
         description: s.state === 'ready' ? `ready${s.version ? ` · v${s.version}` : ''}` : s.state === 'unavailable' ? 'not available' : '',
         detail: s.state === 'unavailable' ? s.detail : ENGINE_DETAILS[s.engine],
@@ -582,6 +586,21 @@ export class ChatController {
     if (added.length) this.set({ attachments: [...this.state.attachments, ...added] });
   }
 
+  /** The editor's active file changed (or its selection did). Shown as a one-click chip. */
+  setActiveFile(file: ViewState['activeFile']): void {
+    const a = this.state.activeFile;
+    if (a?.path === file?.path && a?.selection?.startLine === file?.selection?.startLine && a?.selection?.endLine === file?.selection?.endLine) return;
+    this.set({ activeFile: file });
+  }
+
+  /** Attach the file open in the editor, or just its selected lines. */
+  async addActiveFile(): Promise<void> {
+    const att = this.host.activeFileAttachment();
+    if (!att) return this.notify('info', 'Open a file in the editor first.');
+    if (att.kind === 'selection') return this.addAttachment(att);
+    if (att.path) return this.addPaths([att.path]);
+  }
+
   addAttachment(attachment: Attachment): void {
     if (isImageMime(attachment.mime) && !this.state.capabilities.images) {
       this.notify('warn', `${ENGINE_LABELS[this.state.engine]} does not accept images.`);
@@ -658,7 +677,7 @@ export class ChatController {
     }
     if (!this.state.model) await this.refreshCatalog();
     if (!this.state.model) {
-      this.notify('warn', engine.id === 'direct' || engine.id === 'opencode' ? 'No model available. Use /providers to connect a provider, then pick a model.' : 'No model available for this engine.');
+      this.notify('warn', engine.id === 'direct' || engine.id === 'opencode' ? 'No model available. Use /providers to sign in with a subscription (or add an API key), then pick a model.' : 'No model available for this engine.');
       return;
     }
     const sessionId = await this.ensureSession();
@@ -962,24 +981,53 @@ export class ChatController {
   async manageProviders(): Promise<void> {
     if (this.engine.account) return this.accountMenu();
     if (this.state.engine === 'opencode' && this.engine.status().state === 'ready') {
+      // A subscription first; an API key (billed per token) only as the fallback.
       const choice = await this.host.pick(
         [
-          { label: '$(key) Connect an opencode provider with an API key…', detail: 'Stores the key in opencode (auth.json) and makes its models available.', value: 'key' as const },
-          { label: '$(sign-in) Sign in with a subscription in the terminal…', detail: 'Runs `opencode auth login` — ChatGPT Plus/Pro, GitHub Copilot and other OAuth logins.', value: 'login' as const },
+          { label: '$(sign-in) Sign in with a subscription…', description: 'recommended', detail: 'ChatGPT Plus/Pro, GitHub Copilot, GitLab Duo and other plans opencode supports. No per-token charges.', value: 'login' as const },
+          { label: '$(key) Use an API key instead…', description: 'billed per token', detail: 'For providers without a subscription sign-in. Stored by opencode (auth.json).', value: 'key' as const },
           { label: '$(settings-gear) Manage Direct BYOK providers (no opencode needed)…', value: 'direct' as const },
         ],
-        { title: 'OpenCode Hub: Providers' },
+        { title: 'OpenCode Hub: Connect opencode to a model provider' },
       );
+      if (choice === 'login') return this.signInOpencode();
       if (choice === 'key') return this.connectOpencodeProvider();
-      if (choice === 'login') {
-        this.host.runInTerminal('opencode auth', `${quoteIfNeeded(this.host.config<string>('opencode.path', '') || 'opencode')} auth login`);
-        this.notify('info', 'Finish signing in in the terminal. The new models show up here by themselves.');
-        return;
-      }
       if (choice !== 'direct') return;
     }
     await this.manageDirectProviders();
   }
+
+  /** Providers opencode can connect, with their sign-in methods (subscriptions are `oauth`). */
+  private async opencodeProviders(): Promise<ProviderInfo[] | undefined> {
+    const engine = this.engine as Engine & { listConnectableProviders?: () => Promise<ProviderInfo[]> };
+    if (!engine.listConnectableProviders) return undefined;
+    return this.guard('Could not list providers', () => engine.listConnectableProviders!());
+  }
+
+  /** Run `opencode auth login` in a terminal, straight to one provider's subscription sign-in when chosen. */
+  private runOpencodeLogin(target?: { provider: string; method: string }): void {
+    const exe = quoteIfNeeded(this.host.config<string>('opencode.path', '') || 'opencode');
+    const args = target ? ` -p ${target.provider} -m "${target.method.replace(/"/g, '')}"` : '';
+    this.host.runInTerminal('opencode auth', `${exe} auth login${args}`);
+    this.notify('info', 'Finish signing in in the terminal. The new models show up here by themselves.');
+  }
+
+  /** Pick a subscription sign-in (ChatGPT, Copilot, …) and run it in a terminal. */
+  private async signInOpencode(): Promise<void> {
+    const providers = (await this.opencodeProviders()) ?? [];
+    type Target = { provider: string; method: string } | 'other';
+    const order = ['openai', 'github-copilot', 'anthropic', 'google', 'gitlab'];
+    const rank = (id: string) => (order.includes(id) ? order.indexOf(id) : order.length);
+    const items: PickItem<Target>[] = providers
+      .flatMap((p) => (p.authMethods ?? []).filter((m) => m.type === 'oauth').map((m) => ({ p, m })))
+      .sort((x, y) => rank(x.p.id) - rank(y.p.id) || x.p.name.localeCompare(y.p.name))
+      .map(({ p, m }) => ({ label: `$(sign-in) ${p.name}`, description: p.connected ? `${m.label} · signed in` : m.label, value: { provider: p.id, method: m.label } }));
+    items.push({ label: '$(terminal) Another provider…', detail: 'Choose in the terminal from everything opencode supports.', value: 'other' });
+    const target = await this.host.pick(items, { title: 'Sign in to opencode with a subscription', placeholder: 'Your plan is used: no API key, no per-token charges' });
+    if (!target) return;
+    this.runOpencodeLogin(target === 'other' ? undefined : target);
+  }
+
 
   /* -------------------------------------------------------------- account */
 
@@ -1127,18 +1175,33 @@ export class ChatController {
   }
 
   private async connectOpencodeProvider(): Promise<void> {
-    const engine = this.engine as Engine & { listConnectableProviders?: () => Promise<{ id: string; name: string; connected: boolean }[]> };
-    if (!engine.listConnectableProviders || !engine.setProviderApiKey) return;
-    const providers = await this.guard('Could not list providers', () => engine.listConnectableProviders!());
+    const engine = this.engine;
+    if (!engine.setProviderApiKey) return;
+    const providers = await this.opencodeProviders();
     if (!providers) return;
-    const provider = await this.host.pick(providers.map((p) => ({ label: p.name, description: p.connected ? 'connected' : p.id, value: p })), { title: 'Connect provider', placeholder: 'Search 75+ providers…' });
+    const hasPlan = (p: ProviderInfo) => (p.authMethods ?? []).some((m) => m.type === 'oauth');
+    const provider = await this.host.pick(providers.map((p) => ({ label: p.name, description: [p.connected ? 'connected' : p.id, hasPlan(p) ? 'subscription sign-in available' : ''].filter(Boolean).join(' · '), value: p })), { title: 'Connect provider', placeholder: 'Search 75+ providers…' });
     if (!provider) return;
+    // The provider has a subscription sign-in: offer it before the key.
+    const plan = (provider.authMethods ?? []).find((m) => m.type === 'oauth');
+    if (plan) {
+      const how = await this.host.pick(
+        [
+          { label: `$(sign-in) ${plan.label}`, description: 'recommended', detail: 'Uses your plan. No per-token charges. Opens a terminal and the browser.', value: 'plan' as const },
+          { label: '$(key) Paste an API key', description: 'billed per token', value: 'key' as const },
+        ],
+        { title: `Connect ${provider.name}` },
+      );
+      if (!how) return;
+      if (how === 'plan') return this.runOpencodeLogin({ provider: provider.id, method: plan.label });
+    }
     const key = await this.host.input({ title: `API key for ${provider.name}`, password: true, placeholder: 'Paste the API key' });
     if (!key) return;
     await this.guard('Could not store the key', () => engine.setProviderApiKey!(provider.id, key.trim()));
     this.notify('info', `${provider.name} connected.`);
     this.debounce('catalog', 800, () => void this.refreshCatalog());
   }
+
 
   private directProviders(): ProviderConfig[] {
     const list = this.host.config<ProviderConfig[]>('providers', []);
@@ -1147,8 +1210,8 @@ export class ChatController {
 
   private async manageDirectProviders(): Promise<void> {
     const configured = this.directProviders();
-    type Choice = { kind: 'existing'; id: string } | { kind: 'preset'; id: string } | { kind: 'custom'; type: 'openai-compatible' | 'anthropic' };
-    const items: PickItem<Choice>[] = [];
+    type Choice = { kind: 'subscription' } | { kind: 'existing'; id: string } | { kind: 'preset'; id: string } | { kind: 'custom'; type: 'openai-compatible' | 'anthropic' };
+    const items: PickItem<Choice>[] = [{ label: '$(sign-in) Use a subscription instead…', description: 'recommended', detail: 'Claude Code (Claude plan), Codex (ChatGPT plan), opencode (ChatGPT, Copilot and more) or Copilot sign in with your plan. No per-token charges.', value: { kind: 'subscription' } }];
     for (const p of configured) {
       const r = resolveProvider(p);
       const hasKey = !!(await this.host.secrets.get(secretKeyFor(p.id)));
@@ -1162,6 +1225,7 @@ export class ChatController {
     items.push({ label: '$(add) Custom Anthropic-compatible endpoint…', description: 'Any /v1/messages server', value: { kind: 'custom', type: 'anthropic' } });
     const choice = await this.host.pick(items, { title: 'OpenCode Hub: BYOK Providers', placeholder: 'Add a provider or manage an existing one' });
     if (!choice) return;
+    if (choice.kind === 'subscription') return this.pickEngine();
 
     if (choice.kind === 'existing') {
       const action = await this.host.pick(
@@ -1313,6 +1377,8 @@ export class ChatController {
         // Only the extension's own messages; replies from a model belong to the session.
         if (typeof msg.id === 'string' && msg.id.startsWith('local_')) this.set({ messages: this.state.messages.filter((m) => m.id !== msg.id) });
         return;
+      case 'addActiveFile':
+        return this.addActiveFile();
       case 'openFeedback':
         return this.openFeedback(msg.kind ? feedbackKind(msg.kind) : undefined);
       case 'feedback':
@@ -1356,12 +1422,14 @@ export class ChatController {
   }
 }
 
+const ENGINE_ORDER: EngineId[] = ['opencode', 'claude-code', 'codex', 'vscode-lm', 'direct'];
+
 const ENGINE_DETAILS: Record<EngineId, string> = {
-  opencode: 'opencode server — every opencode provider, agents, custom commands, MCP, undo, share',
-  direct: 'Your own API keys: OpenAI, Anthropic, OpenRouter, Ollama, any OpenAI-compatible endpoint',
-  'claude-code': 'Your installed Claude Code CLI, signed in with your Claude account (Pro / Max). API key optional.',
-  codex: 'Your installed Codex CLI, signed in with your ChatGPT account (Plus / Pro). API key optional.',
-  'vscode-lm': 'GitHub Copilot and other models exposed through VS Code',
+  opencode: 'Sign in with ChatGPT, GitHub Copilot or another plan, or use any opencode provider. Agents, commands, MCP, undo, share',
+  'claude-code': 'Your Claude Code CLI, signed in with your Claude plan (Pro / Max). API key optional.',
+  codex: 'Your Codex CLI, signed in with your ChatGPT plan (Plus / Pro). API key optional.',
+  'vscode-lm': 'GitHub Copilot (your Copilot plan) and other models exposed through VS Code',
+  direct: 'API keys only, billed per token: OpenAI, Anthropic, OpenRouter, or a local model (Ollama, LM Studio)',
 };
 
 /** Accepts the pre-release style names too. */

@@ -222,3 +222,45 @@ export function mapQuestion(q: { id: string; sessionID: string; questions?: { he
     questions: (q.questions ?? []).map((x) => ({ header: x.header, question: x.question ?? '', options: x.options ?? [], multiple: x.multiple })),
   };
 }
+
+/** A model from opencode's newer `GET /api/model` (providers connected through integrations). */
+export interface OcApiModel {
+  id: string;
+  providerID: string;
+  name?: string;
+  status?: string;
+  enabled?: boolean;
+  capabilities?: { tools?: boolean; input?: string[] };
+  cost?: { input?: number; output?: number; cache?: { read?: number; write?: number } }[];
+  limit?: { context?: number };
+}
+
+/**
+ * Merge the two lists opencode keeps. Since opencode moved sign-ins to "integrations", a
+ * provider connected that way (the OpenCode Console account, and logins made with newer
+ * CLIs) shows up only in `GET /api/model`, while keys saved the older way (`auth.json`) and
+ * providers from `opencode.json` show up only in `GET /config/providers`. The chat needs both.
+ */
+export function mergeProviderLists(legacy: ProviderInfo[], apiModels: OcApiModel[] | undefined, names: Record<string, string> = {}): ProviderInfo[] {
+  const byId = new Map(legacy.map((p) => [p.id, { ...p, models: [...p.models] }]));
+  for (const m of apiModels ?? []) {
+    if (!m?.id || !m.providerID || m.enabled === false || m.status === 'deprecated') continue;
+    let provider = byId.get(m.providerID);
+    if (!provider) {
+      provider = { id: m.providerID, name: names[m.providerID] || m.providerID, connected: true, models: [] };
+      byId.set(m.providerID, provider);
+    }
+    if (provider.models.some((x) => x.modelId === m.id)) continue;
+    const cost = m.cost?.[0];
+    provider.models.push({
+      providerId: m.providerID,
+      modelId: m.id,
+      name: m.name || m.id,
+      contextWindow: m.limit?.context || undefined,
+      supportsImages: m.capabilities?.input?.includes('image'),
+      supportsTools: m.capabilities?.tools,
+      pricing: cost && (cost.input || cost.output) ? { input: cost.input ?? 0, output: cost.output ?? 0, cacheRead: cost.cache?.read, cacheWrite: cost.cache?.write } : undefined,
+    });
+  }
+  return [...byId.values()].map((p) => ({ ...p, models: p.models.sort((a, b) => a.name.localeCompare(b.name)) })).filter((p) => p.models.length > 0);
+}

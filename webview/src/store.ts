@@ -35,6 +35,7 @@ const EMPTY: ViewState = {
   avatar: { enabled: true, style: 'buddy' },
   zoom: 1,
   providerColors: true,
+  activeFile: undefined,
   trusted: true,
   canRetry: false,
   recentModels: [],
@@ -103,9 +104,13 @@ class Store {
       case 'state':
         this.state = msg.state;
         break;
-      case 'patch':
-        this.state = { ...this.state, ...msg.patch };
+      case 'patch': {
+        // The host sends cleared fields as null (JSON drops undefined): clear them here.
+        const patch: Record<string, unknown> = { ...msg.patch };
+        for (const k of Object.keys(patch)) if (patch[k] === null) patch[k] = undefined;
+        this.state = { ...this.state, ...(patch as Partial<ViewState>) };
         break;
+      }
       case 'event':
       case 'events': {
         if (!this.state.sessionId) return;

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { pathToFileURL } from 'node:url';
 import { toFilePart } from '../../src/engines/opencode/engine';
+import { mergeProviderLists } from '../../src/engines/opencode/mapping';
 import { mapCommand, mapMcp, mapMessage, mapPart, mapPermission, mapProvider, mapSession, mapUsage } from '../../src/engines/opencode/mapping';
 
 // Shapes below are copied from a real opencode 1.19 server.
@@ -108,5 +109,31 @@ describe('toFilePart', () => {
     const inline = toFilePart({ id: '4', kind: 'selection', name: 'Untitled-1:1-2', mime: 'text/plain', text: 'héllo' });
     expect(inline.url).toBe(`data:text/plain;base64,${Buffer.from('héllo').toString('base64')}`);
     expect(toFilePart({ id: '5', kind: 'file', name: 'src/', mime: 'application/x-directory', path: file }).mime).toBe('application/x-directory');
+  });
+});
+
+describe('mergeProviderLists', () => {
+  it('lists providers from both of opencode\'s systems: auth.json and config, and integrations', () => {
+    const legacy = [{ id: 'mock', name: 'Mock', connected: true, models: [{ providerId: 'mock', modelId: 'small', name: 'Small' }] }, { id: 'opencode', name: 'OpenCode', connected: true, models: [{ providerId: 'opencode', modelId: 'big-pickle', name: 'Big Pickle' }] }];
+    const merged = mergeProviderLists(
+      legacy,
+      [
+        { id: 'deepseek-flash', providerID: 'deepseek', name: 'DeepSeek Flash', capabilities: { tools: true, input: ['text', 'image'] }, cost: [{ input: 0.15, output: 0.6, cache: { read: 0.003 } }], limit: { context: 1048576 } },
+        { id: 'big-pickle', providerID: 'opencode', name: 'Big Pickle' },
+        { id: 'zen-pro', providerID: 'opencode', name: 'Zen Pro' },
+        { id: 'old', providerID: 'deepseek', status: 'deprecated' },
+        { id: 'off', providerID: 'deepseek', enabled: false },
+      ],
+      { deepseek: 'DeepSeek' },
+    );
+    expect(merged.map((p) => [p.id, p.name, p.models.map((m) => m.modelId)])).toEqual([
+      ['mock', 'Mock', ['small']],
+      ['opencode', 'OpenCode', ['big-pickle', 'zen-pro']],
+      ['deepseek', 'DeepSeek', ['deepseek-flash']],
+    ]);
+    expect(merged[2].models[0]).toMatchObject({ contextWindow: 1048576, supportsImages: true, supportsTools: true, pricing: { input: 0.15, output: 0.6, cacheRead: 0.003 } });
+    // An older opencode without the newer API: the old list as it was.
+    expect(mergeProviderLists(legacy, undefined)).toEqual(legacy);
+    expect(legacy[1].models).toHaveLength(1);
   });
 });

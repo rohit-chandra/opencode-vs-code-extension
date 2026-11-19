@@ -29,6 +29,8 @@ Works on **Windows, macOS and Linux**, including remote windows (SSH, WSL, dev c
 
 The chat takes the colour of the model's maker, so you always see who you are talking to: a strip along the top of the chat, the message box's border and a dot under the companion turn **orange for Claude**, green for OpenAI, blue for Gemini, purple for Copilot, grey for local models, and so on. It follows the model, not the route: Claude through Copilot or OpenRouter is still orange. `opencodeHub.chat.providerColors` turns it off.
 
+**Your subscription comes first.** Every engine that can sign in with a plan (opencode, Claude Code, Codex, Copilot) offers that before an API key, which is billed per token and is always the last option. Direct BYOK is for API keys and local models only, so its menu starts by pointing you to the engines that use your plan.
+
 Switch at any time with `/engine` or the engine button under the message box. Each engine keeps its own sessions and model choice per folder, and the history shows all of them (see [Sessions](#sessions)).
 
 ## Install
@@ -107,14 +109,14 @@ You need one of these. The chat tells you when the selected engine is missing an
 
    Other install methods are listed on [opencode.ai](https://opencode.ai).
 2. Check that it runs: `opencode --version`
-3. Connect a model provider. Either type `/providers` in the chat, or run this in a terminal and follow the prompts:
+3. Connect a model provider. Type `/providers` in the chat and choose **Sign in with a subscription**, then your plan: ChatGPT Plus/Pro, GitHub Copilot, GitLab Duo or another one opencode supports. A terminal opens straight at that sign-in and your browser asks you to confirm. Or run it yourself in any terminal:
 
    ```bash
    opencode auth login
    ```
 
-   This is also where subscription logins (for example ChatGPT or GitHub Copilot) are set up, when your opencode version offers them. The models appear in the chat as soon as the sign-in finishes, whether you started it from the chat or in your own terminal; no restart is needed.
-4. Back in VS Code, run **OpenCode Hub: Restart Active Engine**, then choose a model with the model button under the message box.
+   The models appear in the chat as soon as the sign-in finishes, wherever you started it; no restart is needed. An API key (billed per token) is the last option in the same menu, for providers without a subscription sign-in.
+4. Choose a model with the model button under the message box.
 
 The extension looks for the CLIs on your `PATH` and in the usual install locations (Homebrew, nvm, Volta, fnm, asdf, mise, pnpm, bun, `~/.local/bin`, npm's global folder on Windows, and more), so an editor started from the macOS Dock or a Linux launcher finds them too. If `opencode` is installed somewhere else, set `opencodeHub.opencode.path` to the full path of the executable. `/doctor` shows what was found.
 
@@ -262,6 +264,7 @@ Output of `/help` and `/doctor` is a card with a close button; it is not part of
 
 ### Attachments
 
+- **The file you have open** appears as a dashed chip above the message box (its selected lines, when you have a selection). Click it to add it, like Copilot's *current file*.
 - Type `@` to search workspace files and attach one.
 - Use the paperclip, or drop files on the chat (hold `Shift` when dragging from the Explorer, a VS Code requirement).
 - Paste an image from the clipboard.

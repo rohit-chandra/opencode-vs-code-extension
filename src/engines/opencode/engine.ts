@@ -24,8 +24,8 @@ import type {
   SlashCommand,
 } from '../../shared/types';
 import { OpencodeClient } from './client';
-import { mapCommand, mapMcp, mapMessage, mapPart, mapPermission, mapProvider, mapQuestion, mapSession, mapUsage } from './mapping';
-import type { OcMessageInfo, OcPart, OcProvider, OcSession } from './mapping';
+import { mapCommand, mapMcp, mapMessage, mapPart, mapPermission, mapProvider, mapQuestion, mergeProviderLists, mapSession, mapUsage } from './mapping';
+import type { OcApiModel, OcMessageInfo, OcPart, OcProvider, OcSession } from './mapping';
 import { startOpencodeServer } from './server';
 import type { RunningServer } from './server';
 
@@ -121,50 +121,76 @@ export class OpencodeEngine implements Engine {
     return this.start();
   }
 
-  /**
-   * Where opencode keeps its provider credentials: `$XDG_DATA_HOME/opencode/auth.json`,
-   * or `~/.local/share/opencode/auth.json`, on every platform (Windows included).
-   */
-  credentialsFile(): string {
+  /** opencode's data folder: `$XDG_DATA_HOME/opencode`, or `~/.local/share/opencode`, on every platform (Windows included). */
+  dataDir(): string {
     const env = this.ctx.env ?? process.env;
     const data = env.XDG_DATA_HOME || path.join(env.HOME || env.USERPROFILE || os.homedir(), '.local', 'share');
-    return path.join(data, 'opencode', 'auth.json');
+    return path.join(data, 'opencode');
+  }
+
+  /** Where keys saved the older way (`opencode auth login` before integrations, `PUT /auth`) live. */
+  credentialsFile(): string {
+    return path.join(this.dataDir(), 'auth.json');
   }
 
   /**
-   * `opencode auth login` (subscription logins such as ChatGPT or GitHub Copilot, and API
-   * keys) runs in a terminal as its own process and writes the credentials file. The server
-   * we started read that file when it started and does not notice the change, so its model
-   * list stays as it was. Watch the file and, when it changes, make the server reload its
-   * providers and tell the chat to list the models again.
+   * Sign-ins happen in a terminal, as their own process: `opencode auth login` (ChatGPT,
+   * Copilot, the OpenCode Console account, API keys) and `opencode console login`. Older
+   * CLIs write `auth.json`; newer ones store "integrations" in opencode's database. The server
+   * we started does not notice either: keys in `auth.json` need a reload, and the chat has
+   * to list the models again in both cases.
+   *
+   * So: a cheap check of the files every couple of seconds; when one changed, ask the server
+   * which providers are connected now, and only if that changed, reload and list again. The
+   * database also changes with every chat message, which is why the second step is needed.
    */
   private async watchCredentials(): Promise<void> {
     this.stopCredentialWatch();
-    const file = this.credentialsFile();
-    const fingerprint = async () => {
+    const dir = this.dataDir();
+    const files = async () => {
       try {
-        const st = await fs.stat(file);
-        return `${st.mtimeMs}:${st.size}`;
+        const names = (await fs.readdir(dir)).filter((n) => n === 'auth.json' || /^opencode.*\.db(-wal)?$/.test(n)).sort();
+        const stats = await Promise.all(names.map(async (n) => [n, await fs.stat(path.join(dir, n)).then((st) => `${st.mtimeMs}:${st.size}`).catch(() => '-')]));
+        return Object.fromEntries(stats) as Record<string, string>;
       } catch {
-        return 'missing';
+        return {} as Record<string, string>;
       }
     };
-    let last = await fingerprint();
+    const authKey = (f: Record<string, string>) => f['auth.json'] ?? 'missing';
+    let lastFiles = await files();
+    let lastConnections = await this.connections();
     let busy = false;
     const timer = setInterval(() => {
       if (busy) return;
       busy = true;
-      void fingerprint()
-        .then(async (now) => {
-          if (now === last || timer !== this.credentialWatch) return;
-          last = now;
-          this.ctx.log.info(`opencode credentials changed (${file}); reloading providers`);
-          await this.reloadProviders();
-        })
-        .finally(() => (busy = false));
+      void (async () => {
+        const now = await files();
+        if (JSON.stringify(now) === JSON.stringify(lastFiles) || timer !== this.credentialWatch) return;
+        const authChanged = authKey(now) !== authKey(lastFiles);
+        lastFiles = now;
+        const connections = await this.connections();
+        const integrationsChanged = connections !== lastConnections;
+        lastConnections = connections;
+        if (!authChanged && !integrationsChanged) return;
+        this.ctx.log.info(`opencode sign-in changed (${authChanged ? 'auth.json' : 'integrations'}); listing models again`);
+        // Keys in auth.json are read when the instance starts; integrations are read live.
+        if (authChanged) await this.reloadProviders();
+        else this.emitter.fire({ type: 'catalog.changed' });
+      })().finally(() => (busy = false));
     }, CREDENTIAL_POLL_MS);
     timer.unref?.();
     this.credentialWatch = timer;
+  }
+
+  /** Connected integrations, as a comparable string. Empty on opencode versions without integrations. */
+  private async connections(): Promise<string> {
+    if (!this.client) return '';
+    const res = await this.client.get<{ data?: { id: string; connections?: unknown[] }[] }>('api/integration').catch(() => undefined);
+    return (res?.data ?? [])
+      .filter((i) => Array.isArray(i.connections) && i.connections.length > 0)
+      .map((i) => `${i.id}:${JSON.stringify(i.connections)}`)
+      .sort()
+      .join('|');
   }
 
   private stopCredentialWatch(): void {
@@ -387,8 +413,18 @@ export class OpencodeEngine implements Engine {
   /* ------------------------------------------------------------- catalog */
 
   async listProviders(): Promise<ProviderInfo[]> {
-    const { providers } = await this.api().get<{ providers: OcProvider[] }>('config/providers');
-    return providers.map((p) => mapProvider(p, true)).filter((p) => p.models.length > 0);
+    const api = this.api();
+    const [{ providers }, models, names] = await Promise.all([
+      api.get<{ providers: OcProvider[] }>('config/providers'),
+      // Newer opencode only: providers connected through integrations (OpenCode Console and
+      // other sign-ins from recent CLIs) are listed here and not in config/providers.
+      api.get<{ data?: OcApiModel[] }>('api/model').then((r) => (Array.isArray(r?.data) ? r.data : undefined)).catch(() => undefined),
+      api
+        .get<{ data?: { id: string; name?: string }[] }>('api/provider')
+        .then((r) => Object.fromEntries((r?.data ?? []).filter((p) => p?.id).map((p) => [p.id, p.name || p.id])))
+        .catch(() => ({}) as Record<string, string>),
+    ]);
+    return mergeProviderLists(providers.map((p) => mapProvider(p, true)), models, names);
   }
 
   /** Every provider opencode knows (connected or not) with the ways to sign in. Used by the connect flow. */

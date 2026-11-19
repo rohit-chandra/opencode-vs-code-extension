@@ -275,3 +275,11 @@ describe('session digest', () => {
     expect(d.total).toBe(80);
   });
 });
+
+describe('webview transport', () => {
+  it('sends cleared fields as null, because JSON drops undefined', async () => {
+    const { clearedAsNull } = await import('../../src/shared/protocol');
+    const patch = clearedAsNull({ sessionId: undefined, activeFile: undefined, zoom: 1.2, messages: [] });
+    expect(JSON.parse(JSON.stringify(patch))).toEqual({ sessionId: null, activeFile: null, zoom: 1.2, messages: [] });
+  });
+});

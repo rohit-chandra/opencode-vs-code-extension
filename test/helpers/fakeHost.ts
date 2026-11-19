@@ -1,3 +1,4 @@
+import type { Attachment } from '../../src/shared/types';
 import type { HostToWebview, ViewState } from '../../src/shared/protocol';
 import type { ControllerHost, PickItem } from '../../src/ui/controller';
 import { applyMessageEvent } from '../../src/shared/reducer';
@@ -98,6 +99,11 @@ export class FakeHost implements ControllerHost {
   }
   environment() {
     return { extensionVersion: '9.9.9', editor: 'Test Editor 1.0.0', ui: 'desktop', platform: 'linux', arch: 'x64', osRelease: '6.0.0-test' };
+  }
+  /** What the editor has open, for the current-file chip. */
+  editorFile: Attachment | undefined;
+  activeFileAttachment() {
+    return this.editorFile;
   }
   repo: string | undefined = 'example/opencode-hub';
   repository() {

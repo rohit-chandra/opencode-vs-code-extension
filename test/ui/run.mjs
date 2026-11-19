@@ -330,6 +330,30 @@ await test('attachments: @ mentions, chips, removal and pasted images', async ()
   await t.page.close();
 });
 
+await test('the file open in the editor is one click away, like Copilot\'s current file', async () => {
+  const t = await open('dark', 400, 760);
+  await t.host({ type: 'state', state: { ...conversation, attachments: [], activeFile: { path: '/repo/src/middleware/auth.ts', name: 'src/middleware/auth.ts' } } });
+  await t.page.waitForSelector('.chip.suggest');
+  assert.equal(await t.text('.chip.suggest span'), 'auth.ts');
+  await t.shot('17-current-file-chip');
+  await t.clearPosted();
+  await t.page.click('.chip.suggest');
+  assert.deepEqual(await t.posted('addActiveFile'), [{ type: 'addActiveFile' }]);
+  // Once attached, the suggestion steps aside.
+  await t.host({ type: 'patch', patch: { attachments: [{ id: 'a1', kind: 'file', name: 'src/middleware/auth.ts', mime: 'text/plain', path: '/repo/src/middleware/auth.ts' }] } });
+  await t.page.waitForFunction(() => !document.querySelector('.chip.suggest'));
+  // A selection is offered as its lines.
+  await t.host({ type: 'patch', patch: { activeFile: { path: '/repo/src/middleware/auth.ts', name: 'src/middleware/auth.ts', selection: { startLine: 12, endLine: 30 } } } });
+  await t.page.waitForSelector('.chip.suggest');
+  assert.equal(await t.text('.chip.suggest span'), 'auth.ts:12-30');
+  // No file open: no chip.
+  // Sent the way the host sends a cleared field: VS Code's JSON transport would drop undefined.
+  await t.host({ type: 'patch', patch: { activeFile: null, attachments: [] } });
+  await t.page.waitForFunction(() => !document.querySelector('.chip.suggest'));
+  assert.deepEqual(t.consoleErrors, []);
+  await t.page.close();
+});
+
 await test('permission and question prompts', async () => {
   const t = await open();
   await t.host({ type: 'state', state: { ...conversation, activity: 'busy', permissions: [{ id: 'per_1', sessionId: 'ses_1', kind: 'bash', title: 'Allow bash?', detail: 'rm -rf dist && npm run build' }], questions: [{ id: 'que_1', sessionId: 'ses_1', questions: [{ question: 'Which test runner should I set up?', options: [{ label: 'Vitest' }, { label: 'Jest' }] }] }] } });
@@ -594,10 +618,11 @@ await test('engine, model and agent pickers', async () => {
   await t.page.click('.controls .pill');
   await t.page.waitForSelector('.menu .menu-item');
   const engines = await t.page.$$eval('.menu .menu-item', (els) => els.map((e) => e.textContent.trim()));
-  assert.deepEqual(engines.slice(0, 5), ['opencodev1.19.6', 'Direct BYOKready', 'Claude Codev2.1.328', 'Codex (ChatGPT)not available', 'Copilot / VS Code models']);
+  // Engines that sign in with a plan first; Direct BYOK (API keys only) last.
+  assert.deepEqual(engines.slice(0, 5), ['opencodev1.19.6', 'Claude Codev2.1.328', 'Codex (ChatGPT)not available', 'Copilot / VS Code models', 'Direct BYOKready']);
   await t.shot('10-engine-menu-dark');
   await t.clearPosted();
-  await t.page.click('.menu .menu-item:nth-child(2)');
+  await t.page.click('.menu .menu-item:nth-child(5)');
   assert.deepEqual(await t.posted('setEngine'), [{ type: 'setEngine', engine: 'direct' }]);
   assert.equal(await t.page.$('.menu'), null);
 

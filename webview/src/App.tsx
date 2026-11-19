@@ -230,7 +230,7 @@ export function App() {
                     </button>
                     {(s.engine === 'direct' || s.engine === 'opencode') && (
                       <button type="button" class="btn" onClick={() => send({ type: 'manageProviders' })}>
-                        Add a provider
+                        Sign in or add a provider
                       </button>
                     )}
                     <button type="button" class="btn quiet" onClick={() => send({ type: 'send', text: '/engine' })}>

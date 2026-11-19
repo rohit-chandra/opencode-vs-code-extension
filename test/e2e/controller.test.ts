@@ -1,3 +1,4 @@
+import { spawn } from 'node:child_process';
 import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import * as path from 'node:path';
@@ -188,6 +189,29 @@ describe.skipIf(!bin)('ChatController with the real opencode engine', () => {
     const sent = JSON.stringify(mock.log.slice(before).filter((l) => l.path === '/chat/completions').map((l) => l.body.messages));
     expect(sent).toContain('compare these three');
     for (const m of markers) expect(sent, `opencode missing ${m}`).toContain(m);
+  });
+
+  it('offers the file open in the editor as context, and its selected lines when there are some', async () => {
+    const file = path.join(project.dir, 'hello.txt');
+    controller.setActiveFile({ path: file, name: 'hello.txt' });
+    expect(host.view!.activeFile).toEqual({ path: file, name: 'hello.txt' });
+    host.editorFile = { id: '', kind: 'file', name: 'hello.txt', mime: 'text/plain', path: file };
+    await controller.handleMessage({ type: 'addActiveFile' });
+    expect(host.view!.attachments).toMatchObject([{ kind: 'file', name: 'hello.txt', path: file }]);
+    // Adding it twice does not attach it twice.
+    await controller.handleMessage({ type: 'addActiveFile' });
+    expect(host.view!.attachments).toHaveLength(1);
+    // With a selection, the selected lines go in.
+    host.editorFile = { id: '', kind: 'selection', name: 'hello.txt:1-1', mime: 'text/plain', path: file, text: 'the secret word is pineapple', range: { startLine: 1, endLine: 1 } };
+    await controller.handleMessage({ type: 'addActiveFile' });
+    expect(host.view!.attachments.map((a) => a.name)).toEqual(['hello.txt', 'hello.txt:1-1']);
+    for (const a of host.view!.attachments) await controller.handleMessage({ type: 'removeAttachment', id: a.id });
+    // No file open: nothing to add, and the user is told.
+    host.editorFile = undefined;
+    await controller.handleMessage({ type: 'addActiveFile' });
+    expect(host.view!.attachments).toHaveLength(0);
+    expect(host.view!.notice?.text).toMatch(/Open a file/);
+    controller.setActiveFile(undefined);
   });
 
   it('answers @-mention file searches', async () => {
@@ -535,6 +559,40 @@ describe.skipIf(!bin)('ChatController with the real opencode engine', () => {
     }
   });
 
+  it('shows the models of an integration sign-in (OpenCode Console, newer CLIs) made in another opencode process', async () => {
+    // Newer opencode CLIs keep sign-ins as "integrations" in opencode's database, not in
+    // auth.json. A second opencode process in the same data folder stands in for the
+    // terminal where the user ran `opencode auth login`.
+    const already = host.view!.providers.some((p) => p.id === 'deepseek');
+    const other = spawn(bin!, ['serve', '--hostname', '127.0.0.1', '--port', '0'], { cwd: project.dir, env: project.env });
+    try {
+      const url = await new Promise<string>((resolve, reject) => {
+        let out = '';
+        const timer = setTimeout(() => reject(new Error(`second opencode did not start: ${out}`)), 45_000);
+        other.stdout.on('data', (d) => {
+          out += String(d);
+          const m = /listening on\s+(https?:\/\/\S+)/i.exec(out);
+          if (m) {
+            clearTimeout(timer);
+            resolve(m[1]);
+          }
+        });
+      });
+      const res = await fetch(`${url}/api/integration/deepseek/connect/key?directory=${encodeURIComponent(project.dir)}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ key: 'sk-console-login' }) });
+      if (res.status === 404) return; // this opencode has no integrations yet: nothing to check
+      expect(res.ok).toBe(true);
+      const v = await host.until((x) => x.providers.some((p) => p.id === 'deepseek' && p.models.length > 0), 20_000, 'models of the integration sign-in');
+      if (already) return;
+      // Another notice may already have replaced it on screen; it was shown.
+      const notices = host.posted.flatMap((m) => (m.type === 'patch' && m.patch.notice ? [m.patch.notice.text] : []));
+      expect(notices.some((t) => /Connected: .*DeepSeek/.test(t))).toBe(true);
+      // Providers from opencode.json are still listed next to the integration ones.
+      expect(v.providers.some((p) => p.id === 'mock')).toBe(true);
+    } finally {
+      other.kill();
+    }
+  });
+
   it('explains what to do when an engine is not installed', async () => {
     await controller.handleMessage({ type: 'setEngine', engine: 'claude-code' });
     const v = await host.until((s) => s.engine === 'claude-code' && !s.loading, 20_000);
@@ -568,11 +626,40 @@ describe.skipIf(!bin)('ChatController with the real opencode engine', () => {
     (ctx.settings.providers as object[]).pop();
   });
 
-  it('offers the terminal sign-in for subscription logins', async () => {
-    host.pickByLabel(/Sign in with a subscription/);
+  it('offers a subscription sign-in first, straight to the chosen plan, and the API key last', async () => {
+    let menu: string[] = [];
+    host.picks.push((items) => {
+      menu = items.map((i) => i.label);
+      return items[0].value;
+    });
+    let plans: string[] = [];
+    host.picks.push((items) => {
+      plans = items.map((i) => `${i.label} | ${i.description ?? ''}`);
+      return items.find((i) => /ChatGPT Pro\/Plus \(browser\)/.test(i.description ?? ''))?.value;
+    });
     await controller.manageProviders();
-    expect(host.terminals.pop()!.command).toMatch(/opencode(\.cmd|\.exe)?"? auth login$/i); // npm installs a .cmd shim on Windows
+    expect(menu[0]).toMatch(/Sign in with a subscription/);
+    expect(menu[1]).toMatch(/API key/);
+    // opencode's own list of subscription logins, ChatGPT and Copilot at the top.
+    expect(plans[0]).toMatch(/OpenAI \| ChatGPT Pro\/Plus/);
+    expect(plans.some((p) => /GitHub Copilot/.test(p))).toBe(true);
+    expect(plans.at(-1)).toMatch(/Another provider/);
+    expect(host.terminals.pop()!.command).toMatch(/opencode(\.cmd|\.exe)?"? auth login -p openai -m "ChatGPT Pro\/Plus \(browser\)"$/i);
+
+    // Connecting a provider that has a plan offers the plan before the key.
+    let how: string[] = [];
+    host.picks.push((items) => items.find((i) => /API key/.test(i.label))?.value);
+    host.picks.push((items) => items.find((i) => (i.value as { id: string }).id === 'openai')?.value);
+    host.picks.push((items) => {
+      how = items.map((i) => i.label);
+      return items[0].value;
+    });
+    await controller.manageProviders();
+    expect(how[0]).toMatch(/ChatGPT Pro\/Plus/);
+    expect(how[1]).toMatch(/Paste an API key/);
+    expect(host.terminals.pop()!.command).toMatch(/auth login -p openai -m "ChatGPT Pro\/Plus \(browser\)"$/);
   });
+
 
   it('persists the usage ledger and resets it on request', async () => {
     await ledger.flush();

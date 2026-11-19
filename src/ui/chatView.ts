@@ -1,5 +1,6 @@
 import { randomBytes } from 'node:crypto';
 import * as vscode from 'vscode';
+import { clearedAsNull } from '../shared/protocol';
 import type { HostToWebview, WebviewToHost } from '../shared/protocol';
 import type { ChatController } from './controller';
 
@@ -84,7 +85,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Webv
       if (message.type === 'insertText' || message.type === 'focusInput') this.queue.push(message);
       return;
     }
-    for (const webview of this.surfaces) void webview.postMessage(message);
+    const wire = message.type === 'patch' ? { ...message, patch: clearedAsNull(message.patch) } : message;
+    for (const webview of this.surfaces) void webview.postMessage(wire);
   }
 
   get visible(): boolean {
@@ -140,3 +142,4 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Webv
 </html>`;
   }
 }
+

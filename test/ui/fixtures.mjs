@@ -53,6 +53,7 @@ export const base = {
   avatar: { enabled: true, style: 'buddy' },
   zoom: 1,
   providerColors: true,
+  activeFile: undefined,
   trusted: true,
   canRetry: false,
   recentModels: [],

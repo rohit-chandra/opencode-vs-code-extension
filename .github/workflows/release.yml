@@ -1,9 +1,12 @@
 name: Release
 
-# Push a tag like v0.1.0 (matching "version" in package.json) to publish a release.
+# Push a tag like v0.2.0 (matching "version" in package.json), or publish a release with
+# that tag from the Releases page, to build, test and attach the .vsix.
 on:
   push:
     tags: ['v*.*.*']
+  release:
+    types: [published]
 
 permissions:
   contents: write
@@ -45,7 +48,13 @@ jobs:
       - name: Create the GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "$GITHUB_REF_NAME" "opencode-hub-$VERSION.vsix" "opencode-hub-$VERSION.vsix.sha256" --title "OpenCode Hub $VERSION" --notes-file notes.md
+        run: |
+          # The release may already exist when the tag was created from the Releases page.
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" "opencode-hub-$VERSION.vsix" "opencode-hub-$VERSION.vsix.sha256" --clobber
+          else
+            gh release create "$GITHUB_REF_NAME" "opencode-hub-$VERSION.vsix" "opencode-hub-$VERSION.vsix.sha256" --title "OpenCode Hub $VERSION" --notes-file notes.md
+          fi
       - uses: actions/upload-artifact@v7
         with:
           name: vsix

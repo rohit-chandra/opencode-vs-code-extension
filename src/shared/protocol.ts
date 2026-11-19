@@ -138,7 +138,7 @@ export type WebviewToHost =
   /** Open the feedback form. */
   | { type: 'openFeedback'; kind?: FeedbackKind }
   /** Open a pre-filled GitHub issue in the browser. */
-  | { type: 'feedback'; kind: FeedbackKind; title: string; description: string; includeDiagnostics: boolean }
+  | { type: 'feedback'; kind: FeedbackKind; title: string; description: string; includeDiagnostics: boolean; /** Copy the link instead of opening the browser. */ copyLink?: boolean }
   | { type: 'openSettings' }
   /** Sent once the companion is on screen; tells the host which renderer the webview ended up with. */
   | { type: 'avatarReady'; renderer: 'webgl' | '2d' }

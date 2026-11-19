@@ -5,6 +5,8 @@
 ### Fixed
 
 - **Claude Code and Codex: the model list now follows your account.** After signing in with a subscription, the list could stay as it was before the sign-in: it was fetched once and kept for ten minutes, and right after a sign-in the CLI itself may not know the plan yet. The list is now fetched again after a sign-in (twice, a few seconds apart), after the first reply, and in the background whenever it is more than a minute old. A sign-in, sign-out or account switch made outside the chat (in a terminal, or by signing in again while signed in) is noticed when the window gets the focus back.
+- **Feedback from a browser signed in with a company-managed GitHub account.** GitHub does not let those accounts create issues outside their company and only answers *Unable to create issue*. The feedback form now has **Copy link**, to open the pre-filled issue in a private window or another browser with a personal account; `/feedback link` copies the last link again; and after opening GitHub a card in the chat says what that error means.
+- When the Claude agent is asked to work on an issue but is not set up for the repository, it now says so in a comment on the issue instead of only in the workflow log.
 - Extra models in `opencodeHub.claudeCode.models` / `opencodeHub.codex.models` appear as soon as the setting changes, not after a restart.
 
 ### Added

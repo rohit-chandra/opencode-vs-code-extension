@@ -56,10 +56,21 @@ jobs:
         id: setup
         env:
           TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
+          ISSUE: ${{ github.event.issue.number }}
+          REPO: ${{ github.repository }}
         run: |
           if [ -z "$TOKEN" ]; then
             echo "::warning::CLAUDE_CODE_OAUTH_TOKEN is not set, so the Claude agent did not run. See docs/MAINTAINING.md."
             echo "ready=false" >> "$GITHUB_OUTPUT"
+            # Say so on the issue too, once, so nobody waits for an agent that is not there.
+            marker='<!-- claude-agent-not-set-up -->'
+            if ! gh issue view "$ISSUE" --repo "$REPO" --json comments --jq '.comments[].body' | grep -qF "$marker"; then
+              gh issue comment "$ISSUE" --repo "$REPO" --body "$marker
+          The Claude agent was asked to work on this issue, but it is not set up for this repository yet, so nothing was changed.
+
+          **Maintainer:** install the [Claude GitHub App](https://github.com/apps/claude) on this repository and add the secret \`CLAUDE_CODE_OAUTH_TOKEN\` (from \`claude setup-token\`). The steps are in [docs/MAINTAINING.md](https://github.com/$REPO/blob/main/docs/MAINTAINING.md#the-claude-agent). Then add the \`claude-fix\` label to this issue (remove it first if it is already there) to start the agent." || true
+            fi
           else
             echo "ready=true" >> "$GITHUB_OUTPUT"
           fi

@@ -506,8 +506,27 @@ describe.skipIf(!bin)('ChatController with the real opencode engine', () => {
     expect(url.searchParams.get('template')).toBe('feature_request.yml');
     expect(url.searchParams.get('title')).toBe('Idea: a cape for Oki');
     expect(url.searchParams.get('diagnostics')).toContain('- OpenCode Hub: 9.9.9');
-    v = await host.until((x) => /GitHub opened/.test(x.notice?.text ?? ''), 5000, 'confirmation');
+    // A card stays in the chat: what to do next, and what GitHub's bare "Unable to create issue" means.
+    v = await host.until((x) => texts(x.messages.at(-1)?.parts ?? []).join('').includes('Your feedback is open on GitHub'), 5000, 'confirmation card');
     expect(v.feedbackDraft).toBeUndefined();
+    const card = v.messages.at(-1)!;
+    expect(card.id.startsWith('local_')).toBe(true);
+    const cardText = texts(card.parts).join('');
+    expect(cardText).toContain('company-managed GitHub account');
+    expect(cardText).toContain(`(${host.opened[0]})`);
+    // "/feedback link" copies the same pre-filled link, for a browser with another account.
+    host.copied = [];
+    await controller.handleMessage({ type: 'send', text: '/feedback link' });
+    expect(host.copied).toEqual([host.opened[0]]);
+    expect(host.view!.notice?.text).toMatch(/Link copied/);
+    await controller.handleMessage({ type: 'dismissMessage', id: card.id });
+
+    // "Copy link" in the form: nothing opens, the link goes to the clipboard.
+    host.opened = [];
+    host.copied = [];
+    await controller.handleMessage({ type: 'feedback', kind: 'bug', title: 'Managed account', description: 'cannot post', includeDiagnostics: false, copyLink: true });
+    expect(host.opened).toEqual([]);
+    expect(new URL(host.copied[0]).searchParams.get('title')).toBe('Bug: Managed account');
 
     // Without diagnostics nothing about the setup is attached, and empty feedback goes nowhere.
     host.opened = [];

@@ -523,9 +523,9 @@ export function FeedbackPanel({ s, onClose }: { s: ViewState; onClose: () => voi
   const [text, setText] = useState(s.feedbackDraft?.text ?? '');
   const [include, setInclude] = useState(true);
   const ready = text.trim().length > 0 || title.trim().length > 0;
-  const submit = () => {
+  const submit = (copyLink = false) => {
     if (!ready) return;
-    send({ type: 'feedback', kind, title, description: text, includeDiagnostics: include });
+    send({ type: 'feedback', kind, title, description: text, includeDiagnostics: include, ...(copyLink ? { copyLink: true } : {}) });
     onClose();
   };
   return (
@@ -566,9 +566,15 @@ export function FeedbackPanel({ s, onClose }: { s: ViewState; onClose: () => voi
         </details>
       )}
       <p class="sheet-foot">Issues on GitHub are public and need a GitHub account. Your prompts, files, paths and keys are never added. Leave out anything private.</p>
+      <p class="sheet-foot">
+        Is your browser signed in to GitHub with a company-managed account? Those cannot post outside the company, and GitHub only says "Unable to create issue". Use <b>Copy link</b> and open it in a private window or another browser with a personal account.
+      </p>
       <div class="sheet-actions">
-        <button type="button" class="btn primary" disabled={!ready} title="Opens github.com in your browser (Ctrl+Enter)" onClick={submit}>
+        <button type="button" class="btn primary" disabled={!ready} title="Opens github.com in your browser (Ctrl+Enter)" onClick={() => submit()}>
           Continue on GitHub
+        </button>
+        <button type="button" class="btn" disabled={!ready} title="Copy the pre-filled link, to open it where a personal GitHub account is signed in" onClick={() => submit(true)}>
+          Copy link
         </button>
         <button type="button" class="btn quiet" onClick={onClose}>
           Cancel

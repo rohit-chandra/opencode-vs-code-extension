@@ -27,7 +27,7 @@ export const BUILTIN_COMMANDS: SlashCommand[] = [
   { name: 'avatar', description: 'Show, hide or restyle the 3D companion', source: 'builtin', argumentHint: '[on|off|buddy|dots]' },
   { name: 'move', description: 'Dock the chat left, right, or open it as an editor tab', source: 'builtin', argumentHint: '[left|right|editor]' },
   { name: 'zoom', description: 'Make the chat text larger or smaller', source: 'builtin', argumentHint: '[in|out|reset|120%]' },
-  { name: 'feedback', description: 'Report a bug or share an idea (opens a pre-filled GitHub issue)', source: 'builtin', argumentHint: '[bug|idea|other] [text]' },
+  { name: 'feedback', description: 'Report a bug or share an idea (opens a pre-filled GitHub issue)', source: 'builtin', argumentHint: '[bug|idea|other] [text] | link' },
   { name: 'doctor', description: 'Check versions, your system and which engines are working', source: 'builtin' },
   { name: 'clear', description: 'Clear the chat (starts a new session)', source: 'builtin' },
   { name: 'help', description: 'List available commands', source: 'builtin' },

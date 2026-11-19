@@ -80,6 +80,8 @@ export class ChatController {
   /** Engine whose sign-in was started in a terminal and is being waited for. */
   private signInPending: EngineId | undefined;
   private signInTimer: ReturnType<typeof setTimeout> | undefined;
+  /** The last pre-filled issue link, so it can be opened where another GitHub account is signed in. */
+  private lastFeedbackUrl: string | undefined;
   /** Who each account engine was signed in as when last checked, to notice a change. */
   private authIdentities = new Map<EngineId, string>();
   private lastAuthCheck = 0;
@@ -790,6 +792,7 @@ export class ChatController {
         return this.doctor();
       case 'feedback': {
         const first = args.split(/\s+/, 1)[0]?.toLowerCase() ?? '';
+        if (first === 'link' && args.trim().toLowerCase() === 'link') return this.copyFeedbackLink();
         const kind = first === 'bug' || first === 'idea' || first === 'other' ? first : undefined;
         return this.openFeedback(kind, kind ? args.slice(first.length).trim() : args);
       }
@@ -982,16 +985,33 @@ export class ChatController {
    * Open a pre-filled issue on GitHub in the user's browser. They review it there and press
    * Submit themselves; the extension sends nothing on its own.
    */
-  async submitFeedback(input: { kind: FeedbackKind; title: string; description: string; includeDiagnostics: boolean }): Promise<void> {
+  async submitFeedback(input: { kind: FeedbackKind; title: string; description: string; includeDiagnostics: boolean; copyLink?: boolean }): Promise<void> {
     const slug = this.host.repository();
     if (!slug) return this.notify('error', 'This build does not say where its GitHub repository is, so feedback cannot be opened.');
     const description = input.description.trim();
     if (!description && !input.title.trim()) return this.notify('warn', 'Write a few words first.');
     const url = buildIssueUrl(slug, { kind: feedbackKind(input.kind), title: input.title, description, diagnostics: input.includeDiagnostics ? this.diagnostics() : '' });
-    await this.guard('Could not open GitHub', () => this.host.openExternal(url));
+    this.lastFeedbackUrl = url;
     this.set({ feedbackDraft: undefined });
-    this.notify('info', 'GitHub opened in your browser. Review the issue there and press Submit.');
+    if (input.copyLink) return this.copyFeedbackLink();
+    if ((await this.guard('Could not open GitHub', () => this.host.openExternal(url).then(() => true))) !== true) return;
+    // A card that stays in the chat: GitHub's own error says nothing about why it refused.
+    this.localMessage(
+      [
+        '**Your feedback is open on GitHub.** Review it there and press **Create**.',
+        '',
+        `If GitHub answers *Unable to create issue*, that browser is signed in with a company-managed GitHub account (the page says "Users managed by …"). GitHub does not let those accounts post outside their company. Use a personal GitHub account instead: \`/feedback link\` copies the pre-filled link, to paste into a private window or another browser. Or [open it again](${url}).`,
+      ].join('\n'),
+    );
   }
+
+  /** Copy the link of the last feedback, to open where another GitHub account is signed in. */
+  private async copyFeedbackLink(): Promise<void> {
+    if (!this.lastFeedbackUrl) return this.notify('info', 'There is no feedback link yet. Type /feedback and fill in the form first.');
+    await this.host.copy(this.lastFeedbackUrl);
+    this.notify('info', 'Link copied. Paste it into a browser or private window where you are signed in to GitHub with a personal account.');
+  }
+
 
   /** `/doctor`: what is installed and working, shown in the chat. Nothing leaves the machine. */
   private doctor(): void {
@@ -1457,7 +1477,7 @@ export class ChatController {
       case 'openFeedback':
         return this.openFeedback(msg.kind ? feedbackKind(msg.kind) : undefined);
       case 'feedback':
-        return this.submitFeedback({ kind: feedbackKind(msg.kind), title: String(msg.title ?? ''), description: String(msg.description ?? ''), includeDiagnostics: msg.includeDiagnostics !== false });
+        return this.submitFeedback({ kind: feedbackKind(msg.kind), title: String(msg.title ?? ''), description: String(msg.description ?? ''), includeDiagnostics: msg.includeDiagnostics !== false, copyLink: msg.copyLink === true });
       case 'openSettings':
         return this.host.openSettings('opencodeHub');
       case 'avatarReady':

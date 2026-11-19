@@ -101,7 +101,7 @@ Only your comments are passed to the agent as context (`include_comments_by_acto
 
 Running `/install-github-app` inside Claude Code in a clone of the repository does steps 1 to 3 for you. To use an API key instead of a subscription, add the secret `ANTHROPIC_API_KEY` and change `claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}` to `anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}` in both jobs.
 
-Until the secret exists the workflow does nothing and says so in its log.
+Until the secret exists the workflow changes nothing; it says so in its log and in one comment on the issue.
 
 `CLAUDE.md` in the repository root is what the agent reads first: the commands, the layout and the rules that are easy to break. Keep it short and current.
 

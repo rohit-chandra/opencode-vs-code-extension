@@ -419,6 +419,7 @@ The extension has no telemetry, so the maintainers only know about a problem whe
 
 - Type `/feedback`, run **OpenCode Hub: Send Feedback or Report a Problem…**, or click **Report a problem** under a reply that failed.
 - Choose *Bug*, *Idea* or *Other*, write a few lines and press **Continue on GitHub**. A pre-filled issue opens in your browser; you review it there and press Submit. Nothing is sent before that.
+- **GitHub says *Unable to create issue*?** Then that browser is signed in with a company-managed GitHub account (the page shows "Users managed by …"), and GitHub does not let those accounts post outside their company. Use **Copy link** in the form, or `/feedback link` afterwards, and open the link in a private window or another browser where you use a personal GitHub account.
 - Diagnostics are optional and you see them first: the versions of the extension and the editor, your operating system, and which engines are ready. Prompts, files, paths and keys are never included.
 
 What happens next: a maintainer reads the issue. For something the project's Claude agent can fix, the maintainer adds the `claude-fix` label; the agent then reproduces the problem, fixes it on a branch and opens a pull request that a human reviews before it is merged. [docs/MAINTAINING.md](docs/MAINTAINING.md) describes the set-up.

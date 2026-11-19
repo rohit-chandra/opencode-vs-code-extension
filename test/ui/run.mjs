@@ -482,6 +482,14 @@ await test('feedback form: kind, details, diagnostics preview and what is sent',
   await t.page.keyboard.press('Enter');
   await t.page.keyboard.up('Control');
   assert.deepEqual(await t.posted('feedback'), [{ type: 'feedback', kind: 'bug', title: '', description: 'Codex never answers', includeDiagnostics: false }]);
+  // Copy link: for a browser where a personal GitHub account is signed in (company-managed accounts cannot post).
+  await t.clearPosted();
+  await t.host({ type: 'patch', patch: { feedbackDraft: { kind: 'idea', text: 'Via another browser' }, panel: { name: 'feedback', nonce: 13 } } });
+  await t.page.waitForSelector('.sheet .feedback-text');
+  assert.match(await t.text('.sheet'), /company-managed account/);
+  await t.page.click('.sheet-actions .btn:not(.primary):not(.quiet)');
+  assert.deepEqual(await t.posted('feedback'), [{ type: 'feedback', kind: 'idea', title: '', description: 'Via another browser', includeDiagnostics: true, copyLink: true }]);
+  assert.equal(await t.page.$('.sheet'), null);
   assert.deepEqual(t.consoleErrors, []);
   await t.page.close();
 });

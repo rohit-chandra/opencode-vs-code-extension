@@ -5,7 +5,7 @@ import type { EngineAccount, EngineContext } from '../../core/engine';
 import { EngineError } from '../../core/engine';
 import { LocalEngine } from '../../core/localEngine';
 import type { Turn } from '../../core/localEngine';
-import { findExecutable, runCapture } from '../../core/process';
+import { findExecutable, runCapture, terminalCommand } from '../../core/process';
 import type { AuthMode, AuthStatus, EngineCapabilities, McpServerInfo, ModelInfo, ModelRef, PromptInput, ProviderInfo, SlashCommand } from '../../shared/types';
 import { claudeInitInfo, claudeModelInfo } from './modelDiscovery';
 import { apiKeySecret, authMode, claudeEnv, parseClaudeAuthStatus, shellExe } from './auth';
@@ -90,8 +90,8 @@ export class ClaudeCodeEngine extends LocalEngine {
       const res = await runCapture(this.exe, ['auth', 'status', '--json'], { env: await this.runEnv(), timeoutMs: 20_000 }).catch(() => undefined);
       return { engine: 'claude-code', mode, ...(res ? parseClaudeAuthStatus(res.stdout) : { signedIn: undefined }) };
     },
-    loginCommand: () => `${shellExe(this.ctx.config<string>('claudeCode.path', ''), 'claude')} auth login --claudeai`,
-    logoutCommand: () => `${shellExe(this.ctx.config<string>('claudeCode.path', ''), 'claude')} auth logout`,
+    loginCommand: () => `${shellExe(this.ctx.config<string>('claudeCode.path', ''), terminalCommand('claude', this.exe, this.env()))} auth login --claudeai`,
+    logoutCommand: () => `${shellExe(this.ctx.config<string>('claudeCode.path', ''), terminalCommand('claude', this.exe, this.env()))} auth logout`,
   };
 
   protected async checkAvailability(): Promise<{ ok: boolean; detail?: string; version?: string }> {

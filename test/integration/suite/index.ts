@@ -76,6 +76,27 @@ export async function run(): Promise<void> {
       if (lm.state === 'unavailable') assert.match(lm.detail ?? '', /GitHub Copilot Chat/);
     });
 
+    it('opens the feedback form with diagnostics of this editor and system', async () => {
+      await vscode.commands.executeCommand('opencodeHub.sendFeedback');
+      const s = await until('feedback form', () => (state().panel.name === 'feedback' ? state() : undefined), 10_000);
+      const pkg = vscode.extensions.getExtension(EXTENSION_ID)!.packageJSON as { version: string };
+      assert.ok(s.diagnostics.includes(`- OpenCode Hub: ${pkg.version}`), s.diagnostics);
+      assert.ok(s.diagnostics.includes(vscode.version), s.diagnostics);
+      assert.match(s.diagnostics, /- OS: (macOS|Windows|Linux) \w+ \(/);
+      // Diagnostics must not give away where the user's files are.
+      assert.ok(!s.diagnostics.includes(vscode.workspace.workspaceFolders![0].uri.fsPath));
+      console.log(s.diagnostics.split('\n').map((l) => `      ${l}`).join('\n'));
+    });
+
+    it('/doctor lists every engine in the chat', async () => {
+      const before = state().messages.length;
+      await vscode.commands.executeCommand('opencodeHub.doctor');
+      const s = await until('doctor output', () => (state().messages.length > before ? state() : undefined), 10_000);
+      const text = texts(s.messages[s.messages.length - 1].parts).join('');
+      assert.match(text, /OpenCode Hub doctor/);
+      for (const name of ['opencode', 'Direct BYOK', 'Claude Code', 'Codex (ChatGPT)', 'Copilot / VS Code models']) assert.ok(text.includes(`| ${name}`), `missing ${name}`);
+    });
+
     (hasOpencode ? describe : describe.skip)('with the real opencode server', () => {
       before(async () => {
         await until('opencode ready', () => !state().loading && state().engines.find((e) => e.engine === 'opencode')?.state === 'ready', 90_000);
@@ -114,6 +135,26 @@ export async function run(): Promise<void> {
         assert.equal(atts[1].name, 'hello.txt');
         await api.controller.handleMessage({ type: 'send', text: 'what is in the attachment?' });
         await until('reply', () => state().activity === 'idle' && state().messages.filter((m) => m.role === 'assistant' && m.completedAt).length === 2);
+        assert.equal(state().attachments.length, 0);
+      });
+
+      it('explains a selection and fixes a reported problem straight from the editor', async () => {
+        const doc = await vscode.workspace.openTextDocument(path.join(vscode.workspace.workspaceFolders![0].uri.fsPath, 'hello.txt'));
+        const editor = await vscode.window.showTextDocument(doc);
+        editor.selection = new vscode.Selection(0, 0, 0, 28);
+        const done = () => state().messages.filter((m) => m.role === 'assistant' && m.completedAt).length;
+        const said = () => state().messages.flatMap((m) => texts(m.parts)).join('\n');
+        let n = done();
+        await vscode.commands.executeCommand('opencodeHub.explainSelection');
+        await until('explanation', () => state().activity === 'idle' && done() > n);
+        assert.match(said(), /Explain the attached code/);
+
+        // What the lightbulb runs: a document, the range of the problem and its message.
+        n = done();
+        await vscode.commands.executeCommand('opencodeHub.fixSelection', doc.uri, new vscode.Range(1, 0, 1, 6), 'test(42): the second line is wrong');
+        await until('fix', () => state().activity === 'idle' && done() > n);
+        assert.match(said(), /Fix this problem in hello\.txt, around line 2/);
+        assert.match(said(), /test\(42\): the second line is wrong/);
         assert.equal(state().attachments.length, 0);
       });
 

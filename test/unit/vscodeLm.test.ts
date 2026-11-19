@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest';
 import { VscodeLmEngine } from '../../src/engines/vscodeLm/engine';
 import type { LmApi } from '../../src/engines/vscodeLm/engine';
 import type { McpManager, McpTool } from '../../src/mcp/manager';
+import * as path from 'node:path';
+import { multiAttachments } from '../helpers/attachments';
 import { makeContext, record } from '../helpers/context';
 
 /* A stand-in for the `vscode.lm` API surface the engine uses (GitHub Copilot models in real life). */
@@ -127,6 +129,22 @@ describe('VS Code LM engine (Copilot path) with a fake vscode.lm', () => {
     expect(String(second[0].content)).toContain('Workspace folder: /work/app');
     expect(model.requests[0].options.justification).toMatch(/OpenCode Hub/);
     expect(model.requests[0].options.tools).toBeUndefined();
+    ctx.cleanup();
+  });
+
+  it('sends several attachments with the prompt', async () => {
+    const model = fakeModel(() => [new TextPart('ok')]);
+    const { engine, ctx } = makeEngine([model]);
+    await engine.start();
+    const { attachments, markers } = multiAttachments(path.join(ctx.dir, 'multi'));
+    const rec = record(engine);
+    const session = await engine.createSession();
+    await engine.sendPrompt(session.id, { text: 'compare these three', attachments, model: { providerId: 'copilot', modelId: 'gpt-x' } });
+    await rec.waitIdle(session.id);
+    expect(rec.messages(session.id)[1].error).toBeUndefined();
+    const lastUser = JSON.stringify(model.requests[0].messages.at(-1));
+    expect(lastUser).toContain('compare these three');
+    for (const m of markers) expect(lastUser).toContain(m);
     ctx.cleanup();
   });
 

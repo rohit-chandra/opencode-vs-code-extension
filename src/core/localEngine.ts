@@ -3,9 +3,11 @@ import type { Disposable } from './emitter';
 import type { Engine, EngineContext } from './engine';
 import { errorMessage } from './engine';
 import { newId } from './ids';
+import type { Pricing } from './listPrices';
 import { LocalSessionStore } from './localSessions';
 import type { StoredSession } from './localSessions';
 import { truncate } from './slashCommands';
+import { estimateCost } from './usageLedger';
 import { addUsage, approvalMode, emptyUsage } from '../shared/types';
 import type {
   AgentInfo,
@@ -160,6 +162,14 @@ export abstract class LocalEngine implements Engine {
   /** Decide whether the engine can be used (CLI present, provider configured, …). */
   protected abstract checkAvailability(): Promise<{ ok: boolean; detail?: string; version?: string }>;
   protected abstract runTurn(turn: Turn): Promise<void>;
+
+  /**
+   * Public list price of a model, for engines whose backend reports tokens without a cost.
+   * Undefined (the default) means "unknown": the reply then shows tokens only.
+   */
+  protected listPricing(_model: ModelRef): Pricing | undefined | Promise<Pricing | undefined> {
+    return undefined;
+  }
 
   async start(): Promise<EngineStatus> {
     if (this.state.state === 'ready') return this.state;
@@ -321,7 +331,15 @@ export abstract class LocalEngine implements Engine {
           writer.notice('info', 'Stopped');
         }
         assistantMessage.completedAt = Date.now();
-        if (writer.usageKnown) assistantMessage.usage = writer.usage;
+        if (writer.usageKnown) {
+          let usage = writer.usage;
+          // The engine counted tokens but gave no cost: estimate one from list prices.
+          if (!usage.cost && input.model && this.ctx.config<boolean>('usage.estimateCost', true)) {
+            const cost = estimateCost(usage, await Promise.resolve(this.listPricing(input.model)).catch(() => undefined));
+            if (cost > 0) usage = { ...usage, cost };
+          }
+          assistantMessage.usage = usage;
+        }
         session.info = { ...session.info, updatedAt: assistantMessage.completedAt };
         await save();
         this.store.unpin(sessionId);

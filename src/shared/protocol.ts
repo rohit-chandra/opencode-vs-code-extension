@@ -1,3 +1,4 @@
+import type { FeedbackKind } from './feedback';
 import type {
   AgentInfo,
   ApprovalMode,
@@ -47,6 +48,8 @@ export interface ViewState {
   sessionUsage: SessionUsage | undefined;
   usage: UsageSummary | undefined;
   avatar: { enabled: boolean; style: AvatarStyle };
+  /** Tint the chat's frame with the colour of the model's provider (Claude orange, OpenAI green, …). */
+  providerColors: boolean;
   /** Text scale of the chat (1 = VS Code's font size). */
   zoom: number;
   trusted: boolean;
@@ -59,7 +62,11 @@ export interface ViewState {
   auth: AuthStatus | undefined;
   /** Ask before tools run (default), or proceed without asking. */
   approvals: ApprovalMode;
-  panel: { name: 'none' | 'sessions' | 'mcp' | 'usage' | 'models'; nonce: number };
+  panel: { name: 'none' | 'sessions' | 'mcp' | 'usage' | 'models' | 'feedback'; nonce: number };
+  /** What the feedback form would attach: versions, OS and engine states. Filled when the form opens. */
+  diagnostics: string;
+  /** Kind and text the feedback form starts with (from `/feedback <text>` or "Report a problem"). */
+  feedbackDraft: { kind: FeedbackKind; text: string } | undefined;
   notice: { level: 'info' | 'warn' | 'error'; text: string; nonce: number } | undefined;
   loading: boolean;
 }
@@ -118,6 +125,14 @@ export type WebviewToHost =
   | { type: 'accountMenu' }
   | { type: 'setApprovals'; mode: ApprovalMode }
   | { type: 'restartEngine' }
+  /** Attach a condensed copy of a saved session to the next message. */
+  | { type: 'attachSession'; sessionId: string; engine?: EngineId }
+  /** Close a message the extension wrote itself (/help, /doctor). */
+  | { type: 'dismissMessage'; id: string }
+  /** Open the feedback form. */
+  | { type: 'openFeedback'; kind?: FeedbackKind }
+  /** Open a pre-filled GitHub issue in the browser. */
+  | { type: 'feedback'; kind: FeedbackKind; title: string; description: string; includeDiagnostics: boolean }
   | { type: 'openSettings' }
   /** Sent once the companion is on screen; tells the host which renderer the webview ended up with. */
   | { type: 'avatarReady'; renderer: 'webgl' | '2d' }

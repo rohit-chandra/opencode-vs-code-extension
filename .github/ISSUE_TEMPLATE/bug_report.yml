@@ -1,0 +1,35 @@
+name: Bug report
+description: Something is broken or behaves differently from what you expected.
+labels: [bug, needs-triage]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time. Issues here are public: leave out API keys, private code and anything else you would not post on the internet.
+  - type: textarea
+    id: description
+    attributes:
+      label: What happened?
+      description: What you did, what you expected, and what happened instead. Steps that reproduce it help the most.
+      placeholder: |
+        1. Switched to the Codex engine
+        2. Sent "hello"
+        3. The reply never arrived, Oki looked sad
+    validations:
+      required: true
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: Diagnostics
+      description: Filled in for you when you report from the chat (`/feedback`). Otherwise run `/doctor` in the chat and paste the first lines.
+      render: markdown
+    validations:
+      required: false
+  - type: textarea
+    id: logs
+    attributes:
+      label: Log output
+      description: 'Optional. Run the command "OpenCode Hub: Show Logs" and paste the lines around the problem. Check them for anything private first.'
+      render: text
+    validations:
+      required: false

@@ -13,6 +13,8 @@
 //   - If the last user text contains `[[think]]` it emits reasoning first.
 //   - If the last user text contains `[[error]]` it responds with HTTP 500.
 //   - If the last user text contains `[[slow]]` the chat-completions stream pauses 150 ms per chunk.
+//   - A model named `<anything>-ctx<N>` has a context window of N tokens (4 characters each):
+//     larger requests get HTTP 400 with the provider's usual "too long" error.
 import http from 'node:http';
 
 const USAGE = { prompt: 120, completion: 30, cached: 20, reasoning: 5 };
@@ -53,6 +55,15 @@ function plan(body, messages, toolNames) {
   const isTitle = /title/i.test(JSON.stringify(body.messages?.[0] ?? body.system ?? '').slice(0, 400)) && text.length < 2000 && /generate a (brief |short )?title|title generator/i.test(JSON.stringify(body).slice(0, 3000));
   if (isTitle) return { kind: 'text', text: 'Mock session title' };
   return { kind: 'text', text: `MOCK[${body.model}]: ${text.replace(/\[\[\w+\]\]/g, '').trim()}`, think: text.includes('[[think]]') };
+}
+
+/** Tokens over the window of a `-ctx<N>` model, or undefined when the request fits. */
+function overflow(body) {
+  const m = /-ctx(\d+)$/.exec(String(body.model ?? ''));
+  if (!m) return undefined;
+  const limit = Number(m[1]);
+  const tokens = Math.ceil(JSON.stringify(body.messages ?? []).length / 4);
+  return tokens > limit ? { tokens, limit } : undefined;
 }
 
 function chunks(s, n = 8) {
@@ -97,6 +108,8 @@ export function createMockLlm({ delayMs = 2 } = {}) {
     if (p === '/chat/completions') {
       const messages = body.messages || [];
       if (lastUserText(messages).includes('[[error]]')) { res.writeHead(500, { 'content-type': 'application/json' }); res.end(JSON.stringify({ error: { message: 'mock failure', type: 'server_error' } })); return; }
+      const over = overflow(body);
+      if (over) { res.writeHead(400, { 'content-type': 'application/json' }); res.end(JSON.stringify({ error: { message: `This model's maximum context length is ${over.limit} tokens. However, your messages resulted in ${over.tokens} tokens. Please reduce the length of the messages.`, type: 'invalid_request_error', code: 'context_length_exceeded' } })); return; }
       const slow = lastUserText(messages).includes('[[slow]]'); // stream slowly enough to be stopped
       const pl = plan(body, messages, (body.tools || []).map((t) => t.function?.name));
       const usage = { prompt_tokens: USAGE.prompt, completion_tokens: USAGE.completion, total_tokens: USAGE.prompt + USAGE.completion, prompt_tokens_details: { cached_tokens: USAGE.cached }, completion_tokens_details: { reasoning_tokens: pl.think ? USAGE.reasoning : 0 } };
@@ -131,6 +144,8 @@ export function createMockLlm({ delayMs = 2 } = {}) {
     if (p === '/messages') {
       const messages = body.messages || [];
       if (lastUserText(messages).includes('[[error]]')) { res.writeHead(500, { 'content-type': 'application/json' }); res.end(JSON.stringify({ type: 'error', error: { type: 'api_error', message: 'mock failure' } })); return; }
+      const over = overflow(body);
+      if (over) { res.writeHead(400, { 'content-type': 'application/json' }); res.end(JSON.stringify({ type: 'error', error: { type: 'invalid_request_error', message: `prompt is too long: ${over.tokens} tokens > ${over.limit} maximum` } })); return; }
       const pl = plan(body, messages, (body.tools || []).map((t) => t.name));
       const usage = { input_tokens: USAGE.prompt - USAGE.cached, output_tokens: USAGE.completion, cache_read_input_tokens: USAGE.cached, cache_creation_input_tokens: 0 };
       const id = 'msg_mock' + Date.now();

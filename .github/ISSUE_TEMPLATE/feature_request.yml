@@ -1,0 +1,19 @@
+name: Idea or feature request
+description: Something the chat should do, or do better.
+labels: [enhancement, needs-triage]
+body:
+  - type: textarea
+    id: description
+    attributes:
+      label: What would you like?
+      description: What should happen, and what would it help you with?
+    validations:
+      required: true
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: Your setup
+      description: Optional. Filled in for you when you send feedback from the chat (`/feedback`).
+      render: markdown
+    validations:
+      required: false

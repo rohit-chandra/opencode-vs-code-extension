@@ -10,3 +10,4 @@
 !dist/THIRD_PARTY_NOTICES.txt
 !media/icon.png
 !media/activity.svg
+!media/walkthrough/*.md

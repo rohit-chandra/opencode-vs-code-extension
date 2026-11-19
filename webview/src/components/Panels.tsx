@@ -1,13 +1,15 @@
 import type { ComponentChildren } from 'preact';
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import type { ViewState } from '../../../src/shared/protocol';
+import { FEEDBACK_KINDS } from '../../../src/shared/feedback';
+import type { FeedbackKind } from '../../../src/shared/feedback';
 import { ENGINE_LABELS } from '../../../src/shared/types';
 import type { McpServerInfo, TokenUsage, UsageRow } from '../../../src/shared/types';
 import { compact, dayLabel, money, relativeTime, tokensAll, tokensIn, tokensOut } from '../format';
-import { IconCheck, IconClose, IconPencil, IconPlus, IconRefresh, IconSearch, IconTrash } from '../icons';
+import { IconCheck, IconClose, IconLink, IconPencil, IconPlus, IconRefresh, IconSearch, IconTrash } from '../icons';
 import { send } from '../store';
 
-export type PanelName = 'none' | 'sessions' | 'mcp' | 'usage' | 'models';
+export type PanelName = 'none' | 'sessions' | 'mcp' | 'usage' | 'models' | 'feedback';
 
 function Sheet({ title, onClose, actions, children }: { title: string; onClose: () => void; actions?: ComponentChildren; children: ComponentChildren }) {
   const ref = useRef<HTMLDivElement>(null);
@@ -113,6 +115,11 @@ export function SessionsPanel({ s, onClose }: { s: ViewState; onClose: () => voi
                 </button>
               )}
               <span class="row-actions">
+                {!(here && x.id === s.sessionId) && (
+                  <button type="button" class="icon-btn" title="Use as context: attach a condensed copy to your next message" aria-label={`Use ${x.title} as context`} onClick={() => (send({ type: 'attachSession', sessionId: x.id, engine: x.engine }), onClose())}>
+                    <IconLink size={13} />
+                  </button>
+                )}
                 {here && (
                   <button type="button" class="icon-btn" title="Rename" aria-label={`Rename ${x.title}`} onClick={() => {
                       committed.current = false;
@@ -484,6 +491,81 @@ export function UsagePanel({ s, onClose }: { s: ViewState; onClose: () => void }
         </section>
       )}
       <p class="sheet-foot">Counts come from each provider's own usage report. Copilot does not report usage, so its numbers are estimates.</p>
+    </Sheet>
+  );
+}
+
+/* ---------------------------------------------------------------- feedback */
+
+const FEEDBACK_ORDER: FeedbackKind[] = ['bug', 'idea', 'other'];
+const FEEDBACK_TABS: Record<FeedbackKind, string> = { bug: 'Bug', idea: 'Idea', other: 'Other' };
+const FEEDBACK_HINTS: Record<FeedbackKind, string> = {
+  bug: 'What did you do, what did you expect, and what happened instead?',
+  idea: 'What would you like the chat to do, and what would that help you with?',
+  other: 'Anything you want the maintainers to know.',
+};
+
+/**
+ * Feedback form. It builds a pre-filled GitHub issue and opens it in the browser; the user
+ * reviews and submits it there, so nothing leaves the machine from this form itself.
+ */
+export function FeedbackPanel({ s, onClose }: { s: ViewState; onClose: () => void }) {
+  const [kind, setKind] = useState<FeedbackKind>(s.feedbackDraft?.kind ?? 'bug');
+  const [title, setTitle] = useState('');
+  const [text, setText] = useState(s.feedbackDraft?.text ?? '');
+  const [include, setInclude] = useState(true);
+  const ready = text.trim().length > 0 || title.trim().length > 0;
+  const submit = () => {
+    if (!ready) return;
+    send({ type: 'feedback', kind, title, description: text, includeDiagnostics: include });
+    onClose();
+  };
+  return (
+    <Sheet title="Send feedback" onClose={onClose}>
+      <p class="sheet-lede">Tell the maintainers what is broken or missing. This opens a pre-filled issue on GitHub in your browser; you review it there and press Submit.</p>
+      <div class="segmented" role="tablist" aria-label="Kind of feedback">
+        {FEEDBACK_ORDER.map((k) => (
+          <button type="button" role="tab" key={k} aria-selected={kind === k} title={FEEDBACK_KINDS[k].label} class={kind === k ? 'on' : ''} onClick={() => setKind(k)}>
+            {FEEDBACK_TABS[k]}
+          </button>
+        ))}
+      </div>
+      <label class="field">
+        <span class="field-label">Title (optional)</span>
+        <input type="text" class="field-input" maxLength={120} placeholder="A short summary" value={title} onInput={(e) => setTitle(e.currentTarget.value)} />
+      </label>
+      <label class="field">
+        <span class="field-label">Details</span>
+        <textarea
+          class="field-input feedback-text"
+          rows={7}
+          placeholder={FEEDBACK_HINTS[kind]}
+          value={text}
+          onInput={(e) => setText(e.currentTarget.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) submit();
+          }}
+        />
+      </label>
+      <label class="check">
+        <input type="checkbox" checked={include} onChange={(e) => setInclude(e.currentTarget.checked)} />
+        <span>Include diagnostics (versions, operating system, engine status)</span>
+      </label>
+      {include && (
+        <details class="diagnostics">
+          <summary>See exactly what is included</summary>
+          <pre>{s.diagnostics || 'Collecting…'}</pre>
+        </details>
+      )}
+      <p class="sheet-foot">Issues on GitHub are public and need a GitHub account. Your prompts, files, paths and keys are never added. Leave out anything private.</p>
+      <div class="sheet-actions">
+        <button type="button" class="btn primary" disabled={!ready} title="Opens github.com in your browser (Ctrl+Enter)" onClick={submit}>
+          Continue on GitHub
+        </button>
+        <button type="button" class="btn quiet" onClick={onClose}>
+          Cancel
+        </button>
+      </div>
     </Sheet>
   );
 }

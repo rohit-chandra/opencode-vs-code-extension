@@ -96,6 +96,13 @@ export class FakeHost implements ControllerHost {
   async moveView(to: 'left' | 'right' | 'editor'): Promise<void> {
     this.moved.push(to);
   }
+  environment() {
+    return { extensionVersion: '9.9.9', editor: 'Test Editor 1.0.0', ui: 'desktop', platform: 'linux', arch: 'x64', osRelease: '6.0.0-test' };
+  }
+  repo: string | undefined = 'example/opencode-hub';
+  repository() {
+    return this.repo;
+  }
 
   /** Wait until the mirrored view satisfies a predicate. */
   async until(pred: (v: ViewState) => boolean, timeoutMs = 60_000, what = 'condition'): Promise<ViewState> {

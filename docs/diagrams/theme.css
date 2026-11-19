@@ -1,0 +1,30 @@
+/* Shared look of the README diagrams. Rendered to PNG by scripts/render-diagrams.mjs. */
+:root {
+  --bg: #0f1220;
+  --panel: #161a2e;
+  --card: #1d2240;
+  --line: #2e3560;
+  --ink: #eef0fb;
+  --muted: #9aa3cf;
+  --accent: #42e0cf;
+  --opencode: #42e0cf;
+  --claude: #f0916b;
+  --codex: #8fb4ff;
+  --byok: #ffcf5c;
+  --copilot: #c39bff;
+}
+* {
+  box-sizing: border-box;
+}
+html,
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--ink);
+  font-family: 'DM Sans', 'Inter', 'Segoe UI', system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+code,
+.mono {
+  font-family: 'DejaVu Sans Mono', 'SF Mono', Menlo, Consolas, monospace;
+}

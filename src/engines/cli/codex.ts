@@ -4,7 +4,9 @@ import type { EngineAccount, EngineContext } from '../../core/engine';
 import { EngineError } from '../../core/engine';
 import { LocalEngine } from '../../core/localEngine';
 import type { Turn } from '../../core/localEngine';
-import { findExecutable, runCapture } from '../../core/process';
+import { listPrice } from '../../core/listPrices';
+import type { Pricing } from '../../core/listPrices';
+import { findExecutable, runCapture, terminalCommand } from '../../core/process';
 import type { AuthMode, AuthStatus, EngineCapabilities, McpServerInfo, ModelInfo, ModelRef, ProviderInfo } from '../../shared/types';
 import { codexModels } from './modelDiscovery';
 import { apiKeySecret, authMode, codexEnv, parseCodexLoginStatus, shellExe } from './auth';
@@ -72,8 +74,8 @@ export class CodexEngine extends LocalEngine {
       const res = await runCapture(this.exe, ['login', 'status'], { env: await this.runEnv(), timeoutMs: 20_000 }).catch(() => undefined);
       return { engine: 'codex', mode, ...(res ? parseCodexLoginStatus(`${res.stdout}\n${res.stderr}`, res.code) : { signedIn: undefined }) };
     },
-    loginCommand: (options) => `${shellExe(this.ctx.config<string>('codex.path', ''), 'codex')} login${options?.deviceCode ? ' --device-auth' : ''}`,
-    logoutCommand: () => `${shellExe(this.ctx.config<string>('codex.path', ''), 'codex')} logout`,
+    loginCommand: (options) => `${shellExe(this.ctx.config<string>('codex.path', ''), terminalCommand('codex', this.exe, this.env()))} login${options?.deviceCode ? ' --device-auth' : ''}`,
+    logoutCommand: () => `${shellExe(this.ctx.config<string>('codex.path', ''), terminalCommand('codex', this.exe, this.env()))} logout`,
   };
 
   protected async checkAvailability(): Promise<{ ok: boolean; detail?: string; version?: string }> {
@@ -107,12 +109,24 @@ export class CodexEngine extends LocalEngine {
         const id = m.model ?? m.id;
         if (!id || m.hidden || models.some((x) => x.modelId === id)) continue;
         models.push({ providerId: 'codex', modelId: id, name: m.displayName ?? id, description: m.description, supportsImages: !m.inputModalities || m.inputModalities.includes('image'), supportsTools: true });
-        if (m.isDefault) defaultName = m.displayName ?? id;
+        if (m.isDefault) {
+          defaultName = m.displayName ?? id;
+          this.defaultModelId = id;
+        }
       }
       if (!list) this.ctx.log.warn('Codex did not report its models; set extra ones under "opencodeHub.codex.models".');
     }
     this.modelCache = { at: Date.now(), mode, models, defaultName };
     return this.modelCache;
+  }
+
+  /** Model id Codex picks for the plan when none is configured, once it has told us. */
+  private defaultModelId: string | undefined;
+
+  /** Codex reports tokens but no cost: estimate it from OpenAI's list price for the model that ran. */
+  protected override async listPricing(model: ModelRef): Promise<Pricing | undefined> {
+    const id = model.modelId !== 'default' ? model.modelId : ((await this.configuredModel()) ?? this.defaultModelId);
+    return id ? listPrice('openai', id) : undefined;
   }
 
   /** `model = "…"` from config.toml, which Codex uses when no model is given. */

@@ -486,7 +486,8 @@ export class OpencodeEngine implements Engine {
 /** Convert an attachment into an opencode `FilePartInput`. */
 export function toFilePart(a: Attachment): { type: 'file'; mime: string; filename: string; url: string } {
   if (a.dataUrl) return { type: 'file', mime: a.mime, filename: a.name, url: a.dataUrl };
-  if (a.kind === 'selection' && a.text !== undefined && !a.path) {
+  // Text that has no file on disk: an unsaved selection, a file dropped from outside the editor, a session digest.
+  if (a.text !== undefined && !a.path) {
     return { type: 'file', mime: 'text/plain', filename: a.name, url: `data:text/plain;base64,${Buffer.from(a.text, 'utf8').toString('base64')}` };
   }
   const url = pathToFileURL(a.path ?? a.name);

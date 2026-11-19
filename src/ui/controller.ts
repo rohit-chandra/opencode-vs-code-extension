@@ -6,10 +6,13 @@ import type { Disposable } from '../core/emitter';
 import type { Engine, Logger } from '../core/engine';
 import { errorMessage } from '../core/engine';
 import { newId } from '../core/ids';
+import { sessionDigest } from '../core/sessionDigest';
 import { BUILTIN_COMMANDS, helpMarkdown, isBuiltin, mergeCommands, parseSlash } from '../core/slashCommands';
 import type { KeyValueStore, UsageLedger } from '../core/usageLedger';
 import { PROVIDER_PRESETS, presetById, resolveProvider, secretKeyFor } from '../engines/direct/presets';
 import type { ProviderConfig } from '../engines/direct/presets';
+import { buildIssueUrl, diagnosticsMarkdown, feedbackKind, osLabel } from '../shared/feedback';
+import type { EnvironmentInfo, FeedbackKind } from '../shared/feedback';
 import type { AvatarStyle, HostToWebview, ViewState, WebviewToHost } from '../shared/protocol';
 import { applyMessageEvent, messageText } from '../shared/reducer';
 import { ENGINE_LABELS } from '../shared/types';
@@ -51,6 +54,10 @@ export interface ControllerHost {
   focusView(): Promise<void>;
   /** Dock the chat in the left side bar, the right (secondary) side bar, or open it as an editor tab. */
   moveView(to: 'left' | 'right' | 'editor'): Promise<void>;
+  /** Versions and platform, for `/doctor` and the diagnostics a feedback report can include. */
+  environment(): EnvironmentInfo;
+  /** `owner/repo` on GitHub where feedback is filed, from the extension's package.json. */
+  repository(): string | undefined;
 }
 
 const EMPTY_CAPS = { agents: false, fork: false, share: false, undo: false, compact: false, images: false, mcpToggle: false, permissions: false, providerAuth: false, remoteSessions: false };
@@ -101,12 +108,15 @@ export class ChatController {
       usage: undefined,
       avatar: { enabled: host.config<boolean>('avatar.enabled', true), style: avatarStyle(host.config<string>('avatar.style', 'buddy')) },
       zoom: clampZoom(host.config<number>('chat.zoom', 1)),
+      providerColors: host.config<boolean>('chat.providerColors', true) !== false,
       trusted: host.workspaceTrusted(),
       canRetry: false,
       recentModels: [],
       auth: undefined,
       approvals: approvalMode(host.config<string>('approvals', 'ask')),
       panel: { name: 'none', nonce: 0 },
+      diagnostics: '',
+      feedbackDraft: undefined,
       notice: undefined,
       loading: true,
     };
@@ -571,6 +581,35 @@ export class ChatController {
     this.set({ attachments: [...this.state.attachments, { ...attachment, id: attachment.id || newId('att') }] });
   }
 
+  /**
+   * Add a condensed copy of another session to the next message, so a new chat can build on
+   * an old one. Nothing is carried over unless the user asks for it here.
+   */
+  async attachSession(sessionId: string, engineId: EngineId = this.state.engine): Promise<void> {
+    const engine = this.engines.get(engineId);
+    if (!engine) return;
+    if (engineId === this.state.engine && sessionId === this.state.sessionId) return this.notify('info', 'That is the session you are in: the model already has it.');
+    const info = [...this.state.sessions, ...this.state.otherSessions].find((x) => x.id === sessionId && x.engine === engineId);
+    const messages = await this.guard('Could not read that session', () => engine.getMessages(sessionId));
+    if (!messages) return;
+    const title = info?.title ?? 'Earlier session';
+    const digest = sessionDigest(title, ENGINE_LABELS[engineId], messages);
+    if (digest.total === 0) return this.notify('warn', `"${title}" has no messages to carry over.`);
+    this.addAttachment({ id: '', kind: 'file', name: `Session: ${title}`, mime: 'text/markdown', text: digest.text, size: digest.text.length });
+    this.notify('info', `Added "${title}" as context for your next message${digest.included < digest.total ? ` (condensed: ${digest.included} of ${digest.total} messages)` : ''}.`);
+  }
+
+  /** `/context`: choose a saved session, from any engine, to carry into this chat. */
+  async pickSessionContext(query = ''): Promise<void> {
+    await this.refreshOtherSessions().catch(() => undefined);
+    const all = [...this.state.sessions, ...this.state.otherSessions].filter((x) => !(x.engine === this.state.engine && x.id === this.state.sessionId)).sort((a, b) => b.updatedAt - a.updatedAt);
+    if (all.length === 0) return this.notify('info', 'There is no other saved session to bring in yet.');
+    const q = query.toLowerCase();
+    const matches = q ? all.filter((x) => x.title.toLowerCase().includes(q)) : [];
+    const chosen = matches.length === 1 ? matches[0] : await this.host.pick(all.map((x) => ({ label: x.title, description: ENGINE_LABELS[x.engine], detail: new Date(x.updatedAt).toLocaleString(), value: x })), { title: 'OpenCode Hub: Add a session as context', placeholder: 'A condensed copy is attached to your next message' });
+    if (chosen) await this.attachSession(chosen.id, chosen.engine);
+  }
+
   async pickFiles(): Promise<void> {
     const files = await this.host.pickFiles();
     if (files.length) await this.addPaths(files);
@@ -674,10 +713,19 @@ export class ChatController {
         return this.openPanel('usage');
       case 'help':
         return this.localMessage(helpMarkdown(this.state.commands));
+      case 'doctor':
+        return this.doctor();
+      case 'feedback': {
+        const first = args.split(/\s+/, 1)[0]?.toLowerCase() ?? '';
+        const kind = first === 'bug' || first === 'idea' || first === 'other' ? first : undefined;
+        return this.openFeedback(kind, kind ? args.slice(first.length).trim() : args);
+      }
       case 'stop':
         return this.abort();
       case 'attach':
         return this.pickFiles();
+      case 'context':
+        return this.pickSessionContext(args);
       case 'providers':
         return this.manageProviders();
       case 'login':
@@ -824,14 +872,80 @@ export class ChatController {
 
   /** Settings changed outside the chat view. */
   onConfigChanged(providersChanged = true): void {
-    this.set({ avatar: { enabled: this.host.config<boolean>('avatar.enabled', true), style: avatarStyle(this.host.config<string>('avatar.style', 'buddy')) }, zoom: clampZoom(this.host.config<number>('chat.zoom', 1)), trusted: this.host.workspaceTrusted(), approvals: approvalMode(this.host.config<string>('approvals', 'ask')) });
+    this.set({ avatar: { enabled: this.host.config<boolean>('avatar.enabled', true), style: avatarStyle(this.host.config<string>('avatar.style', 'buddy')) }, zoom: clampZoom(this.host.config<number>('chat.zoom', 1)), providerColors: this.host.config<boolean>('chat.providerColors', true) !== false, trusted: this.host.workspaceTrusted(), approvals: approvalMode(this.host.config<string>('approvals', 'ask')) });
     if (providersChanged && (this.state.engine === 'direct' || this.state.engine === 'vscode-lm')) this.debounce('config', 400, () => void this.restartEngine());
   }
 
-  showPanel(name: 'mcp' | 'usage' | 'sessions' | 'models'): void {
+  showPanel(name: 'mcp' | 'usage' | 'sessions' | 'models' | 'feedback'): void {
+    if (name === 'feedback') return this.openFeedback();
     if (name === 'mcp') void this.refreshMcp();
     if (name === 'usage') this.pushUsage();
     this.openPanel(name);
+  }
+
+  /* ------------------------------------------------- feedback & diagnostics */
+
+  /** Versions, platform and engine states: what a report needs, with nothing personal in it. */
+  diagnostics(): string {
+    const s = this.state;
+    return diagnosticsMarkdown({
+      env: this.host.environment(),
+      engine: s.engine,
+      engines: [...this.engines.values()].map((e) => e.status()),
+      model: s.model,
+      approvals: s.approvals,
+      avatar: { ...s.avatar, renderer: this.avatarRenderer },
+      trusted: s.trusted,
+    });
+  }
+
+  /** Show the feedback form, optionally started with a kind and some text. */
+  openFeedback(kind?: FeedbackKind, text?: string): void {
+    this.set({ diagnostics: this.diagnostics(), feedbackDraft: kind || text ? { kind: kind ?? 'bug', text: text ?? '' } : undefined });
+    this.openPanel('feedback');
+  }
+
+  /**
+   * Open a pre-filled issue on GitHub in the user's browser. They review it there and press
+   * Submit themselves; the extension sends nothing on its own.
+   */
+  async submitFeedback(input: { kind: FeedbackKind; title: string; description: string; includeDiagnostics: boolean }): Promise<void> {
+    const slug = this.host.repository();
+    if (!slug) return this.notify('error', 'This build does not say where its GitHub repository is, so feedback cannot be opened.');
+    const description = input.description.trim();
+    if (!description && !input.title.trim()) return this.notify('warn', 'Write a few words first.');
+    const url = buildIssueUrl(slug, { kind: feedbackKind(input.kind), title: input.title, description, diagnostics: input.includeDiagnostics ? this.diagnostics() : '' });
+    await this.guard('Could not open GitHub', () => this.host.openExternal(url));
+    this.set({ feedbackDraft: undefined });
+    this.notify('info', 'GitHub opened in your browser. Review the issue there and press Submit.');
+  }
+
+  /** `/doctor`: what is installed and working, shown in the chat. Nothing leaves the machine. */
+  private doctor(): void {
+    const env = this.host.environment();
+    const statuses = [...this.engines.values()].map((e) => e.status());
+    const mark = (state: string) => (state === 'ready' ? 'ready' : state === 'idle' ? 'not started' : state);
+    const rows = statuses.map((st) => `| ${ENGINE_LABELS[st.engine]}${st.engine === this.state.engine ? ' (active)' : ''} | ${mark(st.state)} | ${st.version ?? ''} | ${(st.detail ?? '').replace(/\|/g, '\\|').replace(/\s+/g, ' ')} |`);
+    const mcpOn = this.state.mcp.filter((m) => m.status === 'connected').length;
+    this.localMessage(
+      [
+        '**OpenCode Hub doctor**',
+        '',
+        `- Version: ${env.extensionVersion}`,
+        `- Editor: ${env.editor} (${env.ui}${env.remote ? `, remote: ${env.remote}` : ''})`,
+        `- OS: ${osLabel(env)}`,
+        `- Workspace: ${this.host.cwd() ? (this.state.trusted ? 'trusted' : 'not trusted, so engines stay off') : 'no folder open'}`,
+        `- Model: ${this.state.model ? `${this.state.model.providerId}/${this.state.model.modelId}` : 'none selected'}`,
+        `- MCP servers: ${mcpOn} of ${this.state.mcp.length} connected`,
+        `- Companion: ${this.state.avatar.enabled ? `${this.state.avatar.style}${this.avatarRenderer ? ` (${this.avatarRenderer})` : ''}` : 'off'}`,
+        '',
+        '| Engine | State | Version | Detail |',
+        '|---|---|---|---|',
+        ...rows,
+        '',
+        'Engines that are "not started" are checked when you switch to them (`/engine`). If a CLI is installed but not found, set its path in settings, then run *OpenCode Hub: Restart Active Engine*. `/feedback` reports a problem with these details attached.',
+      ].join('\n'),
+    );
   }
 
   /* ------------------------------------------------------------ providers */
@@ -1184,6 +1298,16 @@ export class ChatController {
         return this.setApprovals(msg.mode === 'auto' ? 'auto' : 'ask');
       case 'restartEngine':
         return this.restartEngine();
+      case 'attachSession':
+        return this.attachSession(msg.sessionId, msg.engine);
+      case 'dismissMessage':
+        // Only the extension's own messages; replies from a model belong to the session.
+        if (typeof msg.id === 'string' && msg.id.startsWith('local_')) this.set({ messages: this.state.messages.filter((m) => m.id !== msg.id) });
+        return;
+      case 'openFeedback':
+        return this.openFeedback(msg.kind ? feedbackKind(msg.kind) : undefined);
+      case 'feedback':
+        return this.submitFeedback({ kind: feedbackKind(msg.kind), title: String(msg.title ?? ''), description: String(msg.description ?? ''), includeDiagnostics: msg.includeDiagnostics !== false });
       case 'openSettings':
         return this.host.openSettings('opencodeHub');
       case 'avatarReady':

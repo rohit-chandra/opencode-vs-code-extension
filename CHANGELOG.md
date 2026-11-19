@@ -1,5 +1,37 @@
 # Changelog
 
+## 0.5.0
+
+### Added
+
+- **Send feedback from the chat.** `/feedback`, *OpenCode Hub: Send Feedback or Report a Problem…*, or **Report a problem** under a failed reply opens a short form (bug, idea or other). Continuing opens a pre-filled GitHub issue in your browser, which you review and submit yourself. Diagnostics (versions, operating system, engine status) are optional and shown before anything leaves; prompts, files, paths and keys are never included.
+- **`/doctor`** and *OpenCode Hub: Run Doctor*: the extension and editor versions, your operating system, and the state and version of every engine, in the chat.
+- **Cost for every engine that counts tokens.** Codex and Direct BYOK (OpenAI, Anthropic, Gemini, Groq, Mistral, DeepSeek, xAI, Together AI, Hugging Face) now show what each reply and session costs, estimated from list prices bundled with the extension, next to the costs opencode, Claude Code and OpenRouter already reported. Prices under `pricing` in `opencodeHub.providers` win; `opencodeHub.usage.estimateCost` turns estimates off.
+- **Bring another session into a new chat.** The link icon in the sessions list, or `/context`, attaches a condensed copy of a saved session (from any engine) to your next message. Optional, never automatic, and no model is called to make it.
+- **Long Direct BYOK conversations keep going.** When a provider reports that the context window is full, the oldest turns are left out of the request (whole turns, so tool calls keep their results) and the chat says so. `opencodeHub.direct.maxContextTokens` sets a budget up front for local servers that cut prompts silently.
+- **Explain Selection** and **Fix Selection** in the editor's context menu, and **Fix with OpenCode Hub** in the lightbulb on errors and warnings (`opencodeHub.editor.quickFix`).
+- A **Get Started** walkthrough (*OpenCode Hub: Get Started*).
+- The output of `/help` and `/doctor` is a card with a **close button**.
+- **The chat shows who you are talking to.** A strip along the top of the chat, the message box's border and a dot under the companion take the colour of the model's maker: orange for Claude, green for OpenAI, blue for Gemini, purple for Copilot, grey for local models. `opencodeHub.chat.providerColors` turns it off.
+
+### Changed
+
+- The model's name is no longer repeated under every reply; it is in the tooltip with the token breakdown.
+- In a typical side bar width, the session pill shows the session's cost (tokens in its tooltip) instead of hiding the cost.
+- **macOS and Linux:** the CLIs are also found where Homebrew, nvm, Volta, fnm, asdf, mise, pnpm, bun, Nix, Snap and Linuxbrew install them, so an editor started from the Dock or a desktop launcher (without your shell's `PATH`) finds them. The CLI's own folder is put on its `PATH` when it is started, so npm-installed CLIs that run on an nvm or Volta Node start too. Sign-in terminals use the full path when the plain command would not be found.
+- CI runs the extension inside VS Code on macOS and Windows as well as Linux, and the engine tests with the real CLIs must pass on all three.
+- The README's architecture diagrams are redesigned and rendered as images, so they also show on the Marketplace page.
+
+### Fixed
+
+- Text attachments with no file on disk (a file dropped from outside VS Code) reached the opencode engine as a path it could not read.
+
+### For maintainers
+
+- The extension is ready for the Visual Studio Marketplace: the release workflow publishes with Trusted Publishing (no stored token) or `VSCE_PAT`, and to Open VSX with `OVSX_PAT`. See `docs/MAINTAINING.md`.
+- `npm run stats` prints installs and downloads from the Marketplace, Open VSX and GitHub releases.
+- A Claude agent workflow (`.github/workflows/claude.yml`) fixes issues labelled `claude-fix` and opens a pull request; issue forms, a pull request template, `SECURITY.md` and `CLAUDE.md` were added.
+
 ## 0.4.0
 
 ### Added

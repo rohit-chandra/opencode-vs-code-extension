@@ -133,7 +133,9 @@ await test('conversation: markdown, code, tool cards, reasoning, files and per-m
   assert.equal(await t.page.$eval('.fold.tool.error .tool-name', (el) => el.textContent), 'bash');
   assert.ok(await t.page.$('.code .hljs-keyword'), 'code is syntax highlighted');
   assert.equal(await t.text('.code-lang'), 'ts');
-  assert.match(await t.text('.msg.assistant .meta'), /claude-sonnet-5-5.*23k in.*852 out.*\$0\.04/s);
+  // Tokens and cost under the reply; the model's name is in the tooltip, not repeated on every reply.
+  assert.match(await t.text('.msg.assistant .meta'), /^23k in.*852 out.*\$0\.04$/s);
+  assert.match(await t.page.$eval('.msg.assistant .meta', (el) => el.title), /^claude-sonnet-5-5 · Input /);
   assert.match(await t.text('.pill.session-tokens'), /^24k · \$0\.04$/);
   assert.match(await t.page.$eval('.usage-btn', (el) => el.title), /23,440 tokens in, 852 out, \$0\.04/);
   assert.ok(await t.page.$('.md table'), 'tables render');
@@ -387,6 +389,105 @@ await test('MCP panel: status of every server and a working toggle switch', asyn
   await t.page.close();
 });
 
+await test('feedback form: kind, details, diagnostics preview and what is sent', async () => {
+  const t = await open('dark', 400, 820);
+  await t.host({ type: 'state', state: conversation });
+  await t.page.waitForSelector('.messages');
+  // /feedback and the title-bar command open it from the host, with the diagnostics filled in.
+  await t.host({ type: 'patch', patch: { panel: { name: 'feedback', nonce: 11 } } });
+  await t.page.waitForSelector('.sheet .feedback-text');
+  assert.equal(await t.text('.sheet-head h2'), 'Send feedback');
+  // Bug is the default kind, and nothing can be sent while the form is empty.
+  assert.equal(await t.page.$eval('.segmented button.on', (el) => el.textContent), 'Bug');
+  assert.equal(await t.page.$eval('.sheet-actions .btn.primary', (el) => el.disabled), true);
+  // The user can see exactly what "diagnostics" means before anything leaves.
+  await t.page.click('.diagnostics summary');
+  const diagnostics = await t.text('.diagnostics pre');
+  assert.match(diagnostics, /OpenCode Hub: 0\.5\.0/);
+  assert.match(diagnostics, /OS: macOS arm64/);
+  await t.page.click('.segmented button:nth-child(2)');
+  await t.page.type('.sheet .field-input[type="text"]', 'A cape for Oki');
+  await t.page.type('.feedback-text', 'Oki should wear a cape when a build passes.');
+  await t.shot('13-feedback');
+  assert.equal(await t.page.$eval('.sheet-actions .btn.primary', (el) => el.disabled), false);
+  await t.page.click('.sheet-actions .btn.primary');
+  assert.deepEqual(await t.posted('feedback'), [{ type: 'feedback', kind: 'idea', title: 'A cape for Oki', description: 'Oki should wear a cape when a build passes.', includeDiagnostics: true }]);
+  // Sending closes the form; GitHub opens in the browser from the host side.
+  assert.equal(await t.page.$('.sheet'), null);
+
+  // A draft from "/feedback bug <text>" is filled in, diagnostics can be left out, Ctrl+Enter sends.
+  await t.clearPosted();
+  await t.host({ type: 'patch', patch: { feedbackDraft: { kind: 'bug', text: 'Codex never answers' }, panel: { name: 'feedback', nonce: 12 } } });
+  await t.page.waitForSelector('.sheet .feedback-text');
+  assert.equal(await t.page.$eval('.feedback-text', (el) => el.value), 'Codex never answers');
+  await t.page.click('.check input');
+  assert.equal(await t.page.$('.diagnostics'), null);
+  await t.page.focus('.feedback-text');
+  await t.page.keyboard.down('Control');
+  await t.page.keyboard.press('Enter');
+  await t.page.keyboard.up('Control');
+  assert.deepEqual(await t.posted('feedback'), [{ type: 'feedback', kind: 'bug', title: '', description: 'Codex never answers', includeDiagnostics: false }]);
+  assert.deepEqual(t.consoleErrors, []);
+  await t.page.close();
+});
+
+await test('/help and /doctor output can be closed; a session can be used as context', async () => {
+  const t = await open('dark', 400, 760);
+  const now = Date.now();
+  const help = { id: 'local_msg_1', sessionId: conversation.sessionId, role: 'assistant', createdAt: now, completedAt: now, parts: [{ id: 'p_help', type: 'text', text: '**Commands**\n\n- `/new` — Start a new session\n- `/doctor` — Check versions' }] };
+  await t.host({ type: 'state', state: { ...conversation, messages: [...conversation.messages, help] } });
+  await t.page.waitForSelector('.msg.local .msg-close');
+  // Only the extension's own messages get a close button.
+  assert.equal((await t.page.$$('.msg-close')).length, 1);
+  await t.page.$eval('.messages', (el) => (el.scrollTop = el.scrollHeight));
+  await t.shot('14-help-closable');
+  await t.page.click('.msg.local .msg-close');
+  assert.deepEqual(await t.posted('dismissMessage'), [{ type: 'dismissMessage', id: 'local_msg_1' }]);
+  await t.host({ type: 'patch', patch: { messages: conversation.messages } });
+  await t.page.waitForFunction(() => !document.querySelector('.msg.local'));
+
+  // Sessions panel: every session except the open one can be attached as condensed context.
+  await t.clearPosted();
+  await t.page.click('.icon-btn[title="Sessions"]');
+  await t.page.waitForSelector('.sheet .list .row');
+  const rows = await t.page.$$eval('.sheet .list > li', (els) => els.map((e) => !!e.querySelector('[aria-label^="Use "]')));
+  assert.equal(rows.filter((x) => !x).length, 1, 'the open session cannot be attached to itself');
+  await t.page.click('.sheet .list [aria-label^="Use "]');
+  const sent = await t.posted('attachSession');
+  assert.equal(sent.length, 1);
+  assert.notEqual(sent[0].sessionId, conversation.sessionId);
+  assert.equal(await t.page.$('.sheet'), null);
+  assert.deepEqual(t.consoleErrors, []);
+  await t.page.close();
+});
+
+await test('provider colours: the frame follows the model\'s maker, and can be turned off', async () => {
+  const t = await open('dark', 400, 760);
+  const frame = () => t.page.evaluate(() => ({ top: getComputedStyle(document.querySelector('.app')).borderTopColor, box: getComputedStyle(document.querySelector('.input-box')).borderColor, provider: document.querySelector('.app').dataset.provider ?? null }));
+  await t.host({ type: 'state', state: { ...conversation, engine: 'claude-code', model: { providerId: 'claude-code', modelId: 'sonnet' } } });
+  await t.page.waitForFunction(() => getComputedStyle(document.querySelector('.app')).borderTopColor === 'rgb(217, 119, 87)');
+  let f = await frame();
+  assert.equal(f.provider, 'anthropic');
+  assert.equal(f.top, 'rgb(217, 119, 87)');
+  assert.ok(await t.page.$('.stage-sub .brand-dot'));
+  assert.match(await t.page.$eval('.pill.model', (el) => el.title), /Anthropic \(Claude\)/);
+  await t.shot('15-provider-claude');
+  await t.host({ type: 'patch', patch: { engine: 'codex', model: { providerId: 'codex', modelId: 'default' } } });
+  // The colour fades over a quarter second.
+  await t.page.waitForFunction(() => document.querySelector('.app').dataset.provider === 'openai' && getComputedStyle(document.querySelector('.app')).borderTopColor === 'rgb(16, 163, 127)');
+  f = await frame();
+  assert.equal(f.top, 'rgb(16, 163, 127)');
+  await t.shot('16-provider-openai');
+  await t.host({ type: 'patch', patch: { engine: 'direct', model: { providerId: 'google', modelId: 'gemini-2.5-pro' } } });
+  await t.page.waitForFunction(() => document.querySelector('.app').dataset.provider === 'google');
+  // Off: no strip, no dot, the theme's own border.
+  await t.host({ type: 'patch', patch: { providerColors: false } });
+  await t.page.waitForFunction(() => !document.querySelector('.app.branded'));
+  assert.equal(await t.page.$('.brand-dot'), null);
+  assert.deepEqual(t.consoleErrors, []);
+  await t.page.close();
+});
+
 await test('usage panel: this session, totals, per provider and model, per day', async () => {
   const t = await open('dark', 400, 980);
   await t.host({ type: 'state', state: { ...conversation, usage: usageSummary } });
@@ -549,6 +650,9 @@ await test('context meter, retry after a failed reply, and recent models', async
   await t.clearPosted();
   await t.page.click('.retry');
   assert.deepEqual(await t.posted('retry'), [{ type: 'retry' }]);
+  // Next to Retry: tell the maintainers. It opens the feedback form as a bug report.
+  await t.page.click('.retry-row .report');
+  assert.deepEqual(await t.posted('openFeedback'), [{ type: 'openFeedback', kind: 'bug' }]);
   await t.host({ type: 'patch', patch: { activity: 'busy' } });
   await t.page.waitForFunction(() => !document.querySelector('.retry'));
   await t.host({ type: 'patch', patch: { activity: 'idle', canRetry: false } });
@@ -721,7 +825,7 @@ await test('copy button on every response', async () => {
   await t.page.click('.msg.assistant .copy-reply');
   assert.deepEqual(await t.posted('copy'), [{ type: 'copy', text: reply }]);
   await t.page.waitForFunction(() => /Copied/.test(document.querySelector('.copy-reply')?.textContent ?? ''));
-  assert.match(await t.text('.msg.assistant .msg-foot .meta'), /claude-sonnet-5-5/);
+  assert.match(await t.text('.msg.assistant .msg-foot .meta'), /23k in/);
   await t.shot('19-copy-response-dark');
   await t.page.waitForFunction(() => /^Copy$/.test(document.querySelector('.copy-reply')?.textContent ?? ''), { timeout: 4000 });
   // A reply that is still streaming offers no copy button yet; it appears once it is done.

@@ -5,6 +5,7 @@ import { DirectEngine } from '../../src/engines/direct/engine';
 import { secretKeyFor } from '../../src/engines/direct/presets';
 import { McpManager } from '../../src/mcp/manager';
 import type { McpServerConfig } from '../../src/mcp/manager';
+import { multiAttachments } from '../helpers/attachments';
 import { makeContext, record } from '../helpers/context';
 import type { TestContext } from '../helpers/context';
 // @ts-expect-error plain ESM fixture without types
@@ -101,6 +102,95 @@ describe('Direct BYOK engine (mock OpenAI-compatible + Anthropic servers)', () =
     const req = mock.log.filter((l) => l.path === '/chat/completions').pop()!;
     expect((req.body.messages as { role: string; content: string }[]).map((m) => m.role)).toEqual(['system', 'user', 'assistant', 'user']);
     expect(rec.messages(session.id)).toHaveLength(4);
+  });
+
+  it('leaves out the oldest turns when the conversation outgrows the context window, and keeps going', async () => {
+    for (const model of [
+      { providerId: 'mockoai', modelId: 'mock-ctx400' },
+      { providerId: 'mockant', modelId: 'claude-mock-ctx400' },
+    ]) {
+      const path_ = model.providerId === 'mockant' ? '/messages' : '/chat/completions';
+      const rec = record(engine);
+      const session = await engine.createSession();
+      const filler = 'lorem ipsum dolor '.repeat(25); // about 110 tokens
+      for (const n of ['one', 'two', 'three', 'four', 'five']) {
+        await engine.sendPrompt(session.id, { text: `turn ${n} ${filler}`, attachments: [], model });
+        await rec.waitIdle(session.id);
+      }
+      const messages = rec.messages(session.id);
+      // Every turn got an answer, none failed, and the whole conversation is still on screen.
+      expect(messages).toHaveLength(10);
+      expect(messages.filter((m) => m.role === 'assistant').every((m) => !m.error && m.completedAt)).toBe(true);
+      expect(messages.at(-1)!.parts.some((p) => p.type === 'text' && p.text.includes('turn five'))).toBe(true);
+      const notices = messages.flatMap((m) => m.parts).filter((p) => p.type === 'notice');
+      expect(notices.length).toBeGreaterThan(0);
+      expect(notices[0]).toMatchObject({ level: 'info' });
+      expect(JSON.stringify(notices[0])).toMatch(/oldest messages were left out/);
+
+      const sent = mock.log.filter((l) => l.path === path_ && l.body.model === model.modelId);
+      const last = JSON.stringify(sent.at(-1)!.body.messages);
+      expect(last).toContain('turn five');
+      expect(last).not.toContain('turn one');
+      // The cut is remembered: the turn after an overflow does not have to fail first again.
+      const before = sent.length;
+      await engine.sendPrompt(session.id, { text: 'short follow-up', attachments: [], model });
+      await rec.waitIdle(session.id);
+      expect(mock.log.filter((l) => l.path === path_ && l.body.model === model.modelId).length - before).toBe(1);
+      // A request starts with something the user said, never with an orphaned reply.
+      const first = (mock.log.filter((l) => l.path === path_ && l.body.model === model.modelId).at(-1)!.body.messages as { role: string }[]).find((m) => m.role !== 'system')!;
+      expect(first.role).toBe('user');
+    }
+  });
+
+  it('says so when a single message is larger than the context window', async () => {
+    const rec = record(engine);
+    const session = await engine.createSession();
+    await engine.sendPrompt(session.id, { text: 'x'.repeat(4000), attachments: [], model: { providerId: 'mockoai', modelId: 'mock-ctx400' } });
+    await rec.waitIdle(session.id);
+    const assistant = rec.messages(session.id).at(-1)!;
+    expect(assistant.error).toMatch(/maximum context length is 400 tokens/);
+    expect(assistant.error).toMatch(/larger than the model's context window on its own/);
+  });
+
+  it('honours a token budget set in settings before the provider has to complain', async () => {
+    ctx.settings['direct.maxContextTokens'] = 150;
+    try {
+      const rec = record(engine);
+      const session = await engine.createSession();
+      const model = { providerId: 'mockoai', modelId: 'mock-large' };
+      for (const n of ['alpha', 'beta', 'gamma']) {
+        await engine.sendPrompt(session.id, { text: `budget ${n} ${'word '.repeat(60)}`, attachments: [], model });
+        await rec.waitIdle(session.id);
+      }
+      const last = JSON.stringify(mock.log.filter((l) => l.path === '/chat/completions').at(-1)!.body.messages);
+      expect(last).toContain('budget gamma');
+      expect(last).not.toContain('budget alpha');
+      expect(rec.messages(session.id).every((m) => !m.error)).toBe(true);
+    } finally {
+      delete ctx.settings['direct.maxContextTokens'];
+    }
+  });
+
+  it('sends several attachments with the prompt, to OpenAI-compatible and Anthropic providers alike', async () => {
+    const { attachments, markers } = multiAttachments(path.join(ctx.dir, 'multi'));
+    for (const [model, route] of [
+      [{ providerId: 'mockoai', modelId: 'mock-small' }, '/chat/completions'],
+      [{ providerId: 'mockant', modelId: 'claude-mock' }, '/messages'],
+    ] as const) {
+      const rec = record(engine);
+      const session = await engine.createSession();
+      await engine.sendPrompt(session.id, { text: 'compare these three', attachments, model });
+      await rec.waitIdle(session.id);
+      const [user, assistant] = rec.messages(session.id);
+      expect(assistant.error).toBeUndefined();
+      // The chat shows the three as chips on the user's message.
+      expect(user.parts.filter((p) => p.type === 'file').map((p) => (p as { filename: string }).filename)).toEqual(['alpha.ts', 'beta.md', 'gamma.py:2-2']);
+      // And the model got all three inside the same user turn as the question.
+      const body = mock.log.filter((l) => l.path === route).at(-1)!.body as { messages: { role: string; content: unknown }[] };
+      const lastUser = JSON.stringify(body.messages.filter((m) => m.role === 'user').at(-1));
+      expect(lastUser).toContain('compare these three');
+      for (const m of markers) expect(lastUser, `${model.providerId} missing ${m}`).toContain(m);
+    }
   });
 
   it('talks to an Anthropic-style endpoint with x-api-key and inlines attachments', async () => {

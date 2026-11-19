@@ -44,7 +44,9 @@ const mock = createMockLlm();
 const port = await mock.listen();
 
 // A throw-away workspace wired to the mock model, plus isolated opencode data and VS Code profile.
-const tmp = mkdtempSync(path.join(os.tmpdir(), 'ochub-vscode-'));
+// macOS keeps temp files under a long /var/folders/… path, and VS Code's IPC socket inside the
+// profile folder must stay under about 100 characters.
+const tmp = mkdtempSync(path.join(process.platform === 'darwin' ? '/tmp' : os.tmpdir(), 'ochub-vscode-'));
 const workspace = path.join(tmp, 'workspace');
 mkdirSync(path.join(workspace, '.vscode'), { recursive: true });
 mkdirSync(path.join(workspace, '.opencode', 'command'), { recursive: true });

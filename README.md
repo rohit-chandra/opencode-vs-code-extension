@@ -2,7 +2,9 @@
 
 An open-source chat for VS Code that works with [opencode](https://opencode.ai) first, and also with Claude Code, Codex (ChatGPT), GitHub Copilot, or any OpenAI-compatible or Anthropic model using your own keys.
 
-One chat, five interchangeable engines, and the same features on all of them: sessions, `/commands`, file attachments, MCP server toggles, token usage statistics, and Oki, a 3D companion that shows how the work is going.
+One chat, five interchangeable engines, and the same features on all of them: sessions, `/commands`, file attachments, MCP server toggles, token usage and cost, and Oki, a 3D companion that shows how the work is going.
+
+Works on **Windows, macOS and Linux**, including remote windows (SSH, WSL, dev containers). No telemetry.
 
 ![Oki's moods: idle, listening, thinking, speaking, waiting, three kinds of working, happy, excited, sad and sleepy](docs/images/moods.png)
 
@@ -13,7 +15,7 @@ One chat, five interchangeable engines, and the same features on all of them: se
 
 > This is an independent community project. It is not built by or affiliated with the opencode team, Anthropic, OpenAI, GitHub or Microsoft.
 
-**Contents:** [Engines](#engines) · [Install](#install) · [Where the chat lives](#where-the-chat-lives) · [Features](#features) · [How it works](#how-it-works) · [Performance](#performance) · [Settings](#settings) · [Security and privacy](#security-and-privacy) · [Development](#development)
+**Contents:** [Engines](#engines) · [Install](#install) · [Where the chat lives](#where-the-chat-lives) · [Features](#features) · [Feedback](#feedback) · [How it works](#how-it-works) · [Performance](#performance) · [Settings](#settings) · [Security and privacy](#security-and-privacy) · [Development](#development)
 
 ## Engines
 
@@ -25,21 +27,43 @@ One chat, five interchangeable engines, and the same features on all of them: se
 | **Codex** | Your installed `codex` CLI | Your ChatGPT account (Plus / Pro / Team) by default; an OpenAI API key if you choose it |
 | **Copilot / VS Code models** | VS Code's Language Model API | Your GitHub Copilot subscription, plus models other extensions register |
 
+The chat takes the colour of the model's maker, so you always see who you are talking to: a strip along the top of the chat, the message box's border and a dot under the companion turn **orange for Claude**, green for OpenAI, blue for Gemini, purple for Copilot, grey for local models, and so on. It follows the model, not the route: Claude through Copilot or OpenRouter is still orange. `opencodeHub.chat.providerColors` turns it off.
+
 Switch at any time with `/engine` or the engine button under the message box. Each engine keeps its own sessions and model choice per folder, and the history shows all of them (see [Sessions](#sessions)).
 
 ## Install
 
-The extension is one `.vsix` file. Installing it takes about two minutes; connecting an engine takes a few more.
+Installing takes about two minutes; connecting an engine takes a few more.
 
 ### What you need
 
-- **VS Code 1.98 or newer** (check under *Help → About*). Editors built on that version or later, such as Cursor, VSCodium and Windsurf, can install it too.
+- **VS Code 1.98 or newer** (check under *Help → About*) on Windows, macOS or Linux. Editors built on that version or later, such as Cursor, VSCodium and Windsurf, can install it too.
 - **At least one engine** from the table above. You can add more later.
 - **Node.js** only if you install a CLI with `npm` or build the extension yourself.
 
-### Step 1: Get the `.vsix` file
+| Platform | Tested in CI |
+|---|---|
+| Windows | Unit tests, the engines against the real CLIs, and the extension inside VS Code |
+| macOS | Unit tests, the engines against the real CLIs, and the extension inside VS Code |
+| Linux, including WSL, SSH and dev containers | Every suite, on the oldest supported VS Code and the current one |
 
-Pick one:
+The extension is one platform-independent package with no native modules, so the same file installs everywhere. In a remote window it runs on the remote machine, next to your code and your CLIs.
+
+### Step 1: Install the extension
+
+**From the Extensions view (recommended)**
+
+1. Open the Extensions view: `Ctrl+Shift+X` (`Cmd+Shift+X` on macOS).
+2. Search for **OpenCode Hub**.
+3. Click **Install**.
+
+Or run this in a terminal: `code --install-extension rohit-chandra.opencode-hub`
+
+If your editor's gallery does not list it yet, install the `.vsix` file instead (Step 2).
+
+### Step 2: Or install from a `.vsix` file
+
+Skip this step if Step 1 worked. Get the file one of these ways:
 
 - **Download a release.** Open the [Releases page](https://github.com/rohit-chandra/opencode-vs-code-extension/releases), expand *Assets* under the newest version and download `opencode-hub-<version>.vsix`.
 - **Download a CI build.** Open the [Actions tab](https://github.com/rohit-chandra/opencode-vs-code-extension/actions), choose the latest green *CI* run and download the `opencode-hub-vsix` artifact. Unzip it to get `opencode-hub.vsix`.
@@ -52,36 +76,21 @@ Pick one:
   npm run package        # writes opencode-hub.vsix in this folder
   ```
 
-### Step 2: Install it in VS Code
-
-Any of these does the same thing.
-
-**From the Extensions view**
-
-1. Open the Extensions view: `Ctrl+Shift+X` (`Cmd+Shift+X` on macOS).
-2. Click the **…** menu at the top of the view.
-3. Choose **Install from VSIX…**
-4. Select the `.vsix` file you downloaded.
-5. When VS Code shows *Completed installing*, choose **Reload Window** if it offers to.
-
-**From the Command Palette**
-
-1. Press `Ctrl+Shift+P` (`Cmd+Shift+P` on macOS).
-2. Run **Extensions: Install from VSIX…** and select the file.
-
-**From a terminal**
+Then install it: in the Extensions view, click the **…** menu, choose **Install from VSIX…** and select the file. Or run **Extensions: Install from VSIX…** from the Command Palette, or use a terminal:
 
 ```bash
-code --install-extension opencode-hub-0.2.0.vsix
+code --install-extension opencode-hub-0.5.0.vsix
 ```
 
-Use `cursor`, `codium` or `windsurf` in place of `code` for those editors. If `code` is not found on macOS, run *Shell Command: Install 'code' command in PATH* from the Command Palette first. On Windows, quote the path if it contains spaces: `code --install-extension "D:\Downloads\opencode-hub-0.2.0.vsix"`.
+Use `cursor`, `codium` or `windsurf` in place of `code` for those editors. If `code` is not found on macOS, run *Shell Command: Install 'code' command in PATH* from the Command Palette first. On Windows, quote the path if it contains spaces: `code --install-extension "D:\Downloads\opencode-hub-0.5.0.vsix"`.
 
 ### Step 3: Open the chat
 
 Click the Oki icon in the activity bar, or press `Ctrl+Alt+O` (`Cmd+Alt+O` on macOS). You can also run **OpenCode Hub: Open Chat** from the Command Palette.
 
 The first time, VS Code may ask whether you trust the folder. Chat only works in trusted folders, because engines run programs and can change files.
+
+**OpenCode Hub: Get Started** in the Command Palette opens a short walkthrough of the steps below.
 
 ### Step 4: Connect an engine
 
@@ -107,7 +116,7 @@ You need one of these. The chat tells you when the selected engine is missing an
    This is also where subscription logins (for example ChatGPT or GitHub Copilot) are set up, when your opencode version offers them.
 4. Back in VS Code, run **OpenCode Hub: Restart Active Engine**, then choose a model with the model button under the message box.
 
-If `opencode` is installed somewhere VS Code cannot find, set `opencodeHub.opencode.path` to the full path of the executable.
+The extension looks for the CLIs on your `PATH` and in the usual install locations (Homebrew, nvm, Volta, fnm, asdf, mise, pnpm, bun, `~/.local/bin`, npm's global folder on Windows, and more), so an editor started from the macOS Dock or a Linux launcher finds them too. If `opencode` is installed somewhere else, set `opencodeHub.opencode.path` to the full path of the executable. `/doctor` shows what was found.
 
 </details>
 
@@ -170,10 +179,11 @@ Your ChatGPT Plus or Pro plan is used, not per-token API billing; `CODEX_API_KEY
 1. Type `hello` and press `Enter`. Oki starts thinking and the reply streams in.
 2. Type `/` to see the commands, and `@` to attach a file from the workspace.
 3. Click the plug icon to see your MCP servers and the chart icon for token usage.
+4. Type `/doctor` to see which engines are installed and ready on this machine.
 
 ### Updating and removing
 
-- **Update:** install the newer `.vsix` the same way. It replaces the old version; sessions, keys and usage statistics are kept.
+- **Update:** VS Code updates extensions from the Marketplace by itself. With a `.vsix`, install the newer file the same way. Sessions, keys and usage statistics are kept either way.
 - **Remove:** in the Extensions view, find *OpenCode Hub*, click the gear and choose **Uninstall**. From a terminal: `code --uninstall-extension rohit-chandra.opencode-hub`.
 
 ### If something does not work
@@ -184,7 +194,8 @@ Your ChatGPT Plus or Pro plan is used, not per-token API billing; `CODEX_API_KEY
 | *No model available* | Run `/providers` and connect a provider, then pick a model |
 | The chat says the workspace is not trusted | Run **Workspaces: Manage Workspace Trust** and trust the folder |
 | Nothing happens after installing | Run **Developer: Reload Window** |
-| Anything else | Run **OpenCode Hub: Show Logs**. The log shows how each engine was started and what it answered |
+| An engine is installed but shows as missing | Type `/doctor`. If the CLI is not found, set its path in settings (`opencodeHub.opencode.path`, `.claudeCode.path`, `.codex.path`) |
+| Anything else | Run **OpenCode Hub: Show Logs**. The log shows how each engine was started and what it answered. `/feedback` reports it to the maintainers |
 
 ## Where the chat lives
 
@@ -219,6 +230,7 @@ Type `/` to see every command, filtered as you type. Commands defined by the eng
 |---|---|
 | `/new`, `/clear` | Start a new session |
 | `/sessions` | Search and switch sessions, rename or delete them |
+| `/context [title]` | Bring another session into this chat as condensed context |
 | `/model [name]`, `/agent [name]`, `/engine [name]` | Change model, agent or engine |
 | `/mcp` | Show MCP servers with their status and a toggle each |
 | `/usage` | Token usage for this session and overall |
@@ -231,7 +243,17 @@ Type `/` to see every command, filtered as you type. Commands defined by the eng
 | `/move [left\|right\|editor]` | Put the chat on the left, on the right, or in an editor tab |
 | `/zoom [in\|out\|reset\|125%]` | Change the chat's text size |
 | `/avatar [on\|off\|buddy\|dots]` | Show, hide or restyle the companion |
+| `/doctor` | Versions, your system and the state of every engine |
+| `/feedback [bug\|idea\|other] [text]` | Report a bug or share an idea (opens a pre-filled GitHub issue) |
 | `/help` | List all commands |
+
+Output of `/help` and `/doctor` is a card with a close button; it is not part of the conversation and is never sent to the model.
+
+### Ask about your code
+
+- Select code, right-click, then **Explain Selection** or **Fix Selection**. The selection is attached and the question is sent in one step.
+- On an error or warning, open the lightbulb (`Ctrl+.`) and choose **Fix with OpenCode Hub**. The lines around the problem and the message from the compiler or linter go to the chat. The lightbulb entry appears once the chat has been opened in the window; turn it off with `opencodeHub.editor.quickFix`.
+- With opencode, Claude Code and Codex the agent edits the file. Direct BYOK and Copilot answer with the corrected code.
 
 ### Retry and recent models
 
@@ -258,6 +280,7 @@ The history button (or `/sessions`) lists your saved sessions. **All engines** s
 
 - **Saved as you go.** A conversation is written when you send a message and every few seconds while the reply streams, so closing VS Code mid-reply keeps it. Claude Code and Codex conversations can be continued after a restart.
 - **Memory stays flat.** Listing reads a small index of titles and dates; a conversation's messages are read from disk when you open it, and only the last few opened stay in memory.
+- **Carry context into a new chat, when you want it.** A new session starts clean. To build on an older one, click the link icon next to it in the sessions list, or type `/context`. A condensed copy (what you asked, what was answered and which tools ran; no tool output) is attached to your next message as a chip you can remove. It works across engines, calls no model and costs nothing until you send it.
 - **Old sessions are cleaned up.** Sessions not used for 30 days are deleted when VS Code starts, like Claude Code's default. Change it with `opencodeHub.sessions.keepDays` (`0` keeps everything). opencode's sessions follow opencode's own rules.
 
 ### Ask or Auto
@@ -301,8 +324,8 @@ The plug icon shows how many MCP servers are connected. Open it to see each serv
 
 Every reply records input, output, reasoning and cached tokens, plus cost when the engine reports it.
 
-- Under each reply: tokens in and out for that reply.
-- Next to the model under the message box: the tokens used by the **open session** so far (with its cost when known). Hover for tokens in and out and the number of replies; click to open the usage panel. The status bar shows the same total.
+- Under each reply: tokens in and out for that reply, and its cost. Hover for the model and the full breakdown.
+- Next to the model under the message box: what the **open session** has cost so far, with its tokens (in a narrow side bar the dollars are shown and the tokens move to the tooltip). Hover for tokens in and out and the number of replies; click to open the usage panel. The status bar shows the same total.
 - `/usage`: this session with a **per-reply breakdown** (model, tokens in and out, cost of each reply), all sessions, a breakdown by provider and model across every engine, tokens per day and recent sessions.
 - The sessions list shows each session's total.
 
@@ -310,7 +333,18 @@ Every reply records input, output, reasoning and cached tokens, plus cost when t
 
 Statistics are stored locally in VS Code and survive restarts. *OpenCode Hub: Reset Token Usage Statistics* clears them.
 
-Costs come from the engine when it reports them (opencode, Claude Code, and providers that return a cost with their usage, such as OpenRouter). For other BYOK providers you can add prices per million tokens under `pricing` in `opencodeHub.providers`. Copilot does not report usage, so its numbers are estimates from the model's tokenizer.
+**Where the dollars come from**
+
+| Engine | Cost |
+|---|---|
+| opencode, Claude Code | Reported by the engine for every reply |
+| Direct BYOK: OpenRouter | Reported by the provider with each reply |
+| Direct BYOK: OpenAI, Anthropic, Gemini, Groq, Mistral, DeepSeek, xAI, Together AI, Hugging Face | Estimated from the provider's public list price for the model |
+| Codex | Estimated from OpenAI's list price for the model |
+| Direct BYOK: Ollama, LM Studio and other local or custom endpoints | None, unless you add prices under `pricing` in `opencodeHub.providers` |
+| Copilot | None. Copilot does not report usage, so even the token numbers are estimates from the model's tokenizer |
+
+Estimates use a price table that ships with the extension (it is refreshed with each release, and nothing is downloaded while you work), so a price that changed last week can be off until the next update. With a subscription (a ChatGPT plan in Codex, a Claude plan in Claude Code) you are not billed per token: the figure is what the same tokens would cost through the API. Prices you set under `pricing` always win, and `opencodeHub.usage.estimateCost` turns estimates off.
 
 ### Oki, the companion
 
@@ -345,54 +379,7 @@ Oki is an original character made for this project.
 
 ### System design
 
-```mermaid
-flowchart TB
-  YOU(["You"])
-
-  subgraph VSC["VS Code"]
-    subgraph WV["Chat webview: sandboxed, no network access"]
-      UI["Chat UI (Preact)<br/>messages, composer, panels"]
-      OKI["Oki companion (Three.js)<br/>loaded on demand"]
-    end
-    subgraph EH["Extension host (Node.js)"]
-      CV["ChatViewProvider<br/>side bar view and editor tab"]
-      CC["ChatController<br/>view state, slash commands,<br/>attachments, approvals"]
-      UL["UsageLedger<br/>tokens by session,<br/>model and provider"]
-      ST[("VS Code storage<br/>sessions and usage,<br/>API keys in Secret Storage")]
-      subgraph EN["Engines: one interface, the same events"]
-        E1["opencode"]
-        E3["Claude Code"]
-        E4["Codex"]
-        E2["Direct BYOK"]
-        E5["Copilot /<br/>VS Code models"]
-      end
-      MM["McpManager<br/>MCP client"]
-    end
-  end
-
-  OC["opencode serve<br/>local HTTP + event stream"]
-  CL["claude CLI<br/>JSON lines"]
-  CX["codex CLI<br/>JSON lines"]
-  API["Model APIs<br/>OpenAI-compatible, Anthropic,<br/>Ollama, LM Studio"]
-  LM["VS Code Language<br/>Model API (Copilot)"]
-  MS["MCP servers<br/>stdio or HTTP"]
-
-  YOU --> UI
-  UI --- OKI
-  UI <-->|"postMessage"| CV
-  CV <--> CC
-  CC --> UL
-  UL --> ST
-  CC <-->|"prompts down, events up"| EN
-  E1 <--> OC
-  E3 <--> CL
-  E4 <--> CX
-  E2 <--> API
-  E5 <--> LM
-  E2 --> MM
-  E5 --> MM
-  MM <--> MS
-```
+![How OpenCode Hub is put together: the chat webview, the extension host with the chat controller, five interchangeable engines, and the CLIs, APIs and MCP servers outside the extension](docs/images/architecture.png)
 
 The extension has three layers:
 
@@ -410,32 +397,7 @@ The extension has three layers:
 
 ### What happens when you send a message
 
-```mermaid
-sequenceDiagram
-  autonumber
-  actor You
-  participant W as Chat webview
-  participant C as ChatController
-  participant E as Engine
-  participant B as Backend (server, CLI or API)
-  participant L as UsageLedger
-
-  You->>W: type a message, press Enter
-  W->>C: send (text, attachments)
-  Note over C: built-in /commands end here
-  C->>E: sendPrompt (session, model, text, files)
-  E->>B: HTTP request or CLI process
-  loop while the model answers
-    B-->>E: stream chunk
-    E-->>C: normalized event
-    C-->>W: events, grouped once per frame
-    W-->>You: text appears, Oki reacts
-  end
-  B-->>E: token counts
-  E-->>C: usage event
-  C->>L: record (message id, tokens, cost)
-  C-->>W: updated totals
-```
+![What happens when you send a message: from the chat webview through the chat controller and the engine to the backend, then the streamed reply and the token counts on the way back](docs/images/message-flow.png)
 
 A few details that matter:
 
@@ -445,6 +407,16 @@ A few details that matter:
 - **MCP toggles go to whoever owns the servers.** For opencode that is the running opencode instance; for Direct BYOK and Copilot it is the extension's own MCP client; Claude Code and Codex get the enabled set as start-up arguments.
 
 More detail, including how to add an engine, is in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+
+## Feedback
+
+The extension has no telemetry, so the maintainers only know about a problem when you tell them.
+
+- Type `/feedback`, run **OpenCode Hub: Send Feedback or Report a Problem…**, or click **Report a problem** under a reply that failed.
+- Choose *Bug*, *Idea* or *Other*, write a few lines and press **Continue on GitHub**. A pre-filled issue opens in your browser; you review it there and press Submit. Nothing is sent before that.
+- Diagnostics are optional and you see them first: the versions of the extension and the editor, your operating system, and which engines are ready. Prompts, files, paths and keys are never included.
+
+What happens next: a maintainer reads the issue. For something the project's Claude agent can fix, the maintainer adds the `claude-fix` label; the agent then reproduces the problem, fixes it on a branch and opens a pull request that a human reviews before it is merged. [docs/MAINTAINING.md](docs/MAINTAINING.md) describes the set-up.
 
 ## Performance
 
@@ -475,7 +447,11 @@ Measured with the UI test suite (headless Chrome, software rendering): a reply s
 | `opencodeHub.codex.path`, `.sandbox`, `.models` | `workspace-write` | Codex CLI location, sandbox policy, extra model names |
 | `opencodeHub.avatar.enabled`, `.style` | `true`, `buddy` | Companion on/off, and `buddy` (the character) or `dots` |
 | `opencodeHub.chat.zoom` | `1` | Text size of the chat, from `0.8` to `1.6` |
+| `opencodeHub.chat.providerColors` | `true` | Colour the chat by the model's maker (Claude orange, OpenAI green, …) |
 | `opencodeHub.usage.statusBar` | `true` | Session tokens in the status bar |
+| `opencodeHub.usage.estimateCost` | `true` | Estimate cost from list prices when the engine reports none |
+| `opencodeHub.direct.maxContextTokens` | `0` | Direct BYOK: cap on conversation history per request. `0` trims only when the provider says the context window is full |
+| `opencodeHub.editor.quickFix` | `true` | Offer *Fix with OpenCode Hub* in the lightbulb menu |
 | `opencodeHub.systemPrompt` | | Extra instructions for Direct BYOK and Copilot |
 
 A custom provider looks like this:
@@ -492,7 +468,7 @@ A custom provider looks like this:
 
 - API keys for Direct BYOK, and for Claude Code or Codex in API-key mode, live in VS Code Secret Storage (your OS keychain), never in settings files. Account logins (Claude, ChatGPT, opencode) stay with each CLI; the extension only asks the CLI whether it is signed in (`claude auth status`, `codex login status`) and does not read the credentials.
 - The opencode server the extension starts listens on `127.0.0.1` only and is protected with a random password for each run.
-- Your prompts and attachments go only to the engine and model you selected. The extension has no telemetry and makes no other network requests.
+- Your prompts and attachments go only to the engine and model you selected. The extension has no telemetry and makes no other network requests. Feedback opens a pre-filled GitHub issue in your browser, which you submit yourself.
 - Model output is sanitized before it is shown. The chat view loads no remote content.
 - In an untrusted workspace no engine is started and chat is off, because engines run executables, load project configuration (MCP servers, plugins) and can run tools. Engine settings stored in the workspace (CLI paths, providers, MCP servers) are ignored there.
 - Tool permissions: in Ask mode, opencode permission requests, Claude Code tool calls and MCP tool calls in Direct BYOK and Copilot are shown for approval. Claude Code's requests come through a small MCP server the extension writes to its storage folder and gives the CLI with `--permission-prompt-tool`; it talks only to `127.0.0.1` with a random token per turn. Codex runs non-interactively, so what it may do is set by `codex.sandbox`. In Auto mode everything is approved without asking.
@@ -501,7 +477,8 @@ A custom provider looks like this:
 
 - Codex cannot ask for approval mid-run; choose its sandbox in settings.
 - The Direct BYOK and Copilot engines are chat with MCP tools. They do not edit files on their own; use opencode, Claude Code or Codex for agentic coding.
-- Direct BYOK does not trim long conversations. Start a new session when a chat gets close to the model's context window.
+- Direct BYOK keeps a long conversation going by leaving the oldest turns out of the request once the provider reports that the context window is full (the chat tells you when that starts). It does not summarize them. Local servers that cut long prompts silently need `opencodeHub.direct.maxContextTokens`.
+- A new session does not remember earlier ones on its own. Use `/context` to bring one in, or keep lasting instructions in the files your engine reads (`AGENTS.md`, `CLAUDE.md`).
 - Sharing, undo and compaction are available where the engine has them (opencode has all three).
 
 ## Development
@@ -512,6 +489,9 @@ npm run build          # bundle extension + webview into dist/
 npm run watch          # rebuild on change, then press F5 in VS Code
 npm run lint && npm run typecheck
 npm run package        # → opencode-hub.vsix
+npm run diagrams       # re-render the README diagrams from docs/diagrams/*.html
+npm run prices         # refresh the bundled list prices (needs the opencode CLI)
+npm run stats          # installs and downloads on the Marketplace, Open VSX and GitHub
 ```
 
 ### Tests
@@ -527,9 +507,9 @@ To run everything locally: `npm i -g opencode-ai @anthropic-ai/claude-code @open
 
 See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for how the pieces fit together and [CONTRIBUTING.md](CONTRIBUTING.md) for how to add an engine.
 
-## Releasing
+## Releasing and maintaining
 
-Push a tag `vX.Y.Z` that matches `version` in `package.json`. The release workflow tests, packages and attaches the `.vsix` to a GitHub Release. If the repository has `VSCE_PAT` or `OVSX_PAT` secrets, it also publishes to the Visual Studio Marketplace and Open VSX.
+Publish a GitHub release with a tag `vX.Y.Z` that matches `version` in `package.json`. The release workflow tests, packages and attaches the `.vsix`, and publishes to the Visual Studio Marketplace and Open VSX when they are set up. [docs/MAINTAINING.md](docs/MAINTAINING.md) covers the one-time Marketplace set-up, where to see how many people use the extension, and the Claude agent that fixes issues.
 
 ## Licence
 

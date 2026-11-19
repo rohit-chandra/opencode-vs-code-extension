@@ -11,6 +11,7 @@ import { McpManager } from '../../src/mcp/manager';
 import type { McpServerConfig } from '../../src/mcp/manager';
 import type { EngineId, Part } from '../../src/shared/types';
 import { ChatController } from '../../src/ui/controller';
+import { multiAttachments } from '../helpers/attachments';
 import { MemoryStore, findBin, makeContext, sleep } from '../helpers/context';
 import type { TestContext } from '../helpers/context';
 import { FakeHost } from '../helpers/fakeHost';
@@ -133,6 +134,18 @@ describe.skipIf(!bin)('ChatController with the real opencode engine', () => {
     expect(mock.log.length).toBe(before);
   });
 
+  it('messages the extension wrote itself can be closed; replies from a model cannot', async () => {
+    const local = host.view!.messages.at(-1)!;
+    expect(local.id.startsWith('local_')).toBe(true);
+    const count = host.view!.messages.length;
+    const reply = host.view!.messages.find((m) => m.role === 'assistant' && !m.id.startsWith('local_'))!;
+    await controller.handleMessage({ type: 'dismissMessage', id: reply.id });
+    expect(host.view!.messages).toHaveLength(count);
+    await controller.handleMessage({ type: 'dismissMessage', id: local.id });
+    expect(host.view!.messages).toHaveLength(count - 1);
+    expect(host.view!.messages.some((m) => m.id === local.id)).toBe(false);
+  });
+
   it('runs an opencode custom command typed as /greet', async () => {
     const count = host.view!.messages.filter((m) => m.role === 'assistant' && !m.id.startsWith('local_')).length;
     await controller.handleMessage({ type: 'send', text: '/greet Ada' });
@@ -159,6 +172,21 @@ describe.skipIf(!bin)('ChatController with the real opencode engine', () => {
     await host.until((s) => s.activity === 'idle' && s.messages.filter((m) => m.role === 'assistant' && m.completedAt && !m.id.startsWith('local_')).length === count + 1);
     const req = mock.log.filter((l) => l.path === '/chat/completions').pop()!;
     expect(JSON.stringify(req.body.messages)).toContain('the secret word is pineapple');
+  });
+
+  it('several attachments added one by one all go out with the next message (opencode)', async () => {
+    const { attachments, markers } = multiAttachments(path.join(project.dir, 'multi'));
+    await controller.handleMessage({ type: 'addPaths', paths: [attachments[0].path!, attachments[1].path!] });
+    await controller.handleMessage({ type: 'addAttachment', attachment: attachments[2] });
+    expect(host.view!.attachments.map((a) => a.name)).toEqual(['multi/alpha.ts', 'multi/beta.md', 'gamma.py:2-2']);
+    const before = mock.log.length;
+    const replies = host.view!.messages.filter((m) => m.role === 'assistant' && m.completedAt).length;
+    await controller.handleMessage({ type: 'send', text: 'compare these three' });
+    await host.until((v) => v.activity === 'idle' && v.messages.filter((m) => m.role === 'assistant' && m.completedAt).length > replies, 60_000, 'reply');
+    expect(host.view!.attachments).toEqual([]);
+    const sent = JSON.stringify(mock.log.slice(before).filter((l) => l.path === '/chat/completions').map((l) => l.body.messages));
+    expect(sent).toContain('compare these three');
+    for (const m of markers) expect(sent, `opencode missing ${m}`).toContain(m);
   });
 
   it('answers @-mention file searches', async () => {
@@ -222,6 +250,48 @@ describe.skipIf(!bin)('ChatController with the real opencode engine', () => {
     // Leave no BYOK session behind for the tests that follow.
     await direct.deleteSession(saved.id);
     await host.state.update('session.direct', undefined);
+  });
+
+  it('carries another session into a new chat as condensed context, only when asked', async () => {
+    // A clean source session: earlier tests left mock directives such as [[tool:…]] in the
+    // main one, and the mock model would act on them again when they come back as context.
+    const original = host.view!.sessionId!;
+    await controller.handleMessage({ type: 'newSession' });
+    await controller.handleMessage({ type: 'send', text: 'the codename is pineapple' });
+    await host.until((x) => x.activity === 'idle' && x.messages.some((m) => m.role === 'assistant' && m.completedAt), 60_000, 'source reply');
+    const source = host.view!.sessionId!;
+    const sourceTitle = host.view!.sessions.find((x) => x.id === source)!.title;
+    // The session you are in is not attached to itself.
+    await controller.handleMessage({ type: 'attachSession', sessionId: source });
+    expect(host.view!.attachments).toHaveLength(0);
+
+    await controller.handleMessage({ type: 'newSession' });
+    expect(host.view!.attachments).toHaveLength(0); // a new chat starts clean
+    await controller.handleMessage({ type: 'attachSession', sessionId: source, engine: 'opencode' });
+    const v = await host.until((x) => x.attachments.length === 1, 10_000, 'session attachment');
+    expect(v.attachments[0].name).toBe(`Session: ${sourceTitle}`);
+    expect(v.attachments[0].text).toContain('Context from an earlier chat session');
+    expect(v.attachments[0].text).toContain('### User');
+    expect(v.attachments[0].text).toContain('### Assistant');
+    expect(v.notice?.text).toMatch(/as context for your next message/);
+
+    const calls = mock.log.length;
+    await controller.handleMessage({ type: 'send', text: 'continue from there' });
+    await host.until((x) => x.activity === 'idle' && x.messages.some((m) => m.role === 'assistant' && m.completedAt), 60_000, 'reply with context');
+    // The model received the condensed session together with the new message.
+    const sent = JSON.stringify(mock.log.slice(calls).map((l) => l.body));
+    expect(sent).toContain('Context from an earlier chat session');
+    expect(sent).toContain('the codename is pineapple');
+    expect(host.view!.attachments).toHaveLength(0);
+
+    await controller.handleMessage({ type: 'newSession' });
+    // /context offers every other saved session in a picker.
+    host.picks = [(items) => items.find((i) => (i.value as { id: string }).id === source)?.value];
+    await controller.handleMessage({ type: 'send', text: '/context' });
+    const w = await host.until((x) => x.attachments.length >= 1, 10_000, '/context attachment');
+    expect(w.attachments[0].name).toContain('Session: ');
+    await controller.handleMessage({ type: 'removeAttachment', id: w.attachments[0].id });
+    await controller.handleMessage({ type: 'switchSession', sessionId: original });
   });
 
   it('switches sessions, restores history and keeps usage per session', async () => {
@@ -394,6 +464,51 @@ describe.skipIf(!bin)('ChatController with the real opencode engine', () => {
     v = await host.until((s) => s.engine === 'opencode' && !s.loading, 20_000, 'back to opencode');
     expect(v.sessions.length).toBeGreaterThan(0);
     expect(host.state.get('engine')).toBe('opencode');
+  });
+
+  it('/feedback opens the form with diagnostics, and sending it opens a pre-filled GitHub issue', async () => {
+    host.opened = [];
+    await controller.handleMessage({ type: 'send', text: '/feedback idea a cape for Oki' });
+    let v = await host.until((x) => x.panel.name === 'feedback', 5000, 'feedback panel');
+    expect(v.feedbackDraft).toEqual({ kind: 'idea', text: 'a cape for Oki' });
+    expect(v.diagnostics).toContain('- OpenCode Hub: 9.9.9');
+    expect(v.diagnostics).toContain('- OS: Linux x64 (6.0.0-test)');
+    expect(v.diagnostics).not.toContain(project.dir);
+
+    await controller.handleMessage({ type: 'feedback', kind: 'idea', title: '', description: 'a cape for Oki', includeDiagnostics: true });
+    const url = new URL(host.opened[0]);
+    expect(url.origin + url.pathname).toBe('https://github.com/example/opencode-hub/issues/new');
+    expect(url.searchParams.get('template')).toBe('feature_request.yml');
+    expect(url.searchParams.get('title')).toBe('Idea: a cape for Oki');
+    expect(url.searchParams.get('diagnostics')).toContain('- OpenCode Hub: 9.9.9');
+    v = await host.until((x) => /GitHub opened/.test(x.notice?.text ?? ''), 5000, 'confirmation');
+    expect(v.feedbackDraft).toBeUndefined();
+
+    // Without diagnostics nothing about the setup is attached, and empty feedback goes nowhere.
+    host.opened = [];
+    await controller.handleMessage({ type: 'feedback', kind: 'bug', title: 'Broken', description: '', includeDiagnostics: false });
+    expect(new URL(host.opened[0]).searchParams.has('diagnostics')).toBe(false);
+    host.opened = [];
+    await controller.handleMessage({ type: 'feedback', kind: 'bug', title: ' ', description: ' ', includeDiagnostics: true });
+    expect(host.opened).toEqual([]);
+
+    // "Report a problem" under a failed reply opens the bug form.
+    await controller.handleMessage({ type: 'openFeedback', kind: 'bug' });
+    v = await host.until((x) => x.panel.name === 'feedback' && x.feedbackDraft?.kind === 'bug', 5000, 'bug form');
+    expect(v.feedbackDraft?.text).toBe('');
+  });
+
+  it('/doctor reports versions and every engine without calling the model', async () => {
+    const calls = mock.log.length;
+    const before = host.view!.messages.length;
+    await controller.handleMessage({ type: 'send', text: '/doctor' });
+    const v = await host.until((x) => x.messages.length > before, 5000, 'doctor output');
+    const text = texts(v.messages[v.messages.length - 1].parts).join('');
+    expect(text).toContain('OpenCode Hub doctor');
+    expect(text).toContain('Version: 9.9.9');
+    expect(text).toMatch(/\| opencode.*\| ready \|/);
+    expect(text).toMatch(/\| Claude Code \|/);
+    expect(mock.log.length).toBe(calls);
   });
 
   it('explains what to do when an engine is not installed', async () => {

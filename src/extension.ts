@@ -1,3 +1,4 @@
+import * as os from 'node:os';
 import * as path from 'node:path';
 import * as vscode from 'vscode';
 import type { Engine, EngineContext } from './core/engine';
@@ -10,6 +11,7 @@ import { OpencodeEngine } from './engines/opencode/engine';
 import { VscodeLmEngine } from './engines/vscodeLm/engine';
 import { McpManager } from './mcp/manager';
 import type { McpServerConfig } from './mcp/manager';
+import { repoSlug } from './shared/feedback';
 import { ENGINE_LABELS, totalTokens } from './shared/types';
 import type { EngineId } from './shared/types';
 import { ChatViewProvider } from './ui/chatView';
@@ -150,6 +152,19 @@ export async function activate(context: vscode.ExtensionContext): Promise<Openco
       await vscode.commands.executeCommand('vscode.moveViews', { viewIds: [ChatViewProvider.viewId], destinationId: destination });
       await vscode.commands.executeCommand(`${ChatViewProvider.viewId}.focus`);
     },
+    environment: () => ({
+      extensionVersion: String((context.extension.packageJSON as { version?: string }).version ?? 'unknown'),
+      editor: `${vscode.env.appName} ${vscode.version}`,
+      ui: vscode.env.uiKind === vscode.UIKind.Web ? 'web' : 'desktop',
+      remote: vscode.env.remoteName,
+      platform: process.platform,
+      arch: process.arch,
+      osRelease: os.release(),
+    }),
+    repository: () => {
+      const pkg = context.extension.packageJSON as { repository?: string | { url?: string } };
+      return repoSlug(typeof pkg.repository === 'string' ? pkg.repository : pkg.repository?.url);
+    },
   };
 
   const controller = new ChatController(engines, ledger, host);
@@ -196,6 +211,31 @@ export async function activate(context: vscode.ExtensionContext): Promise<Openco
     };
   };
 
+  /** A few lines around a problem, as an attachment the model can read. */
+  const rangeAttachment = (doc: vscode.TextDocument, range: vscode.Range, padding = 3) => {
+    const start = Math.max(0, range.start.line - padding);
+    const end = Math.min(doc.lineCount - 1, range.end.line + padding);
+    const rel = vscode.workspace.asRelativePath(doc.uri, false);
+    return {
+      id: newId('att'),
+      kind: 'selection' as const,
+      name: `${rel}:${start + 1}-${end + 1}`,
+      mime: 'text/plain',
+      path: doc.uri.scheme === 'file' ? doc.uri.fsPath : undefined,
+      text: doc.getText(new vscode.Range(start, 0, end, doc.lineAt(end).text.length)),
+      range: { startLine: start + 1, endLine: end + 1 },
+    };
+  };
+
+  /** Attach code and ask about it in one step (editor context menu and the lightbulb). */
+  const askAboutCode = async (attachment: ReturnType<typeof rangeAttachment> | undefined, prompt: string) => {
+    if (!attachment) return void vscode.window.showInformationMessage('Select some code first.');
+    await host.focusView();
+    if (controller.viewState.activity !== 'idle') return void vscode.window.showInformationMessage('OpenCode Hub is still working on the previous message. Stop it or wait, then try again.');
+    controller.addAttachment(attachment);
+    await controller.send(prompt);
+  };
+
   const reg = (id: string, fn: (...args: never[]) => unknown) => context.subscriptions.push(vscode.commands.registerCommand(id, fn as (...args: unknown[]) => unknown));
   reg('opencodeHub.focus', async () => {
     await host.focusView();
@@ -223,6 +263,15 @@ export async function activate(context: vscode.ExtensionContext): Promise<Openco
   reg('opencodeHub.toggleAvatar', () => controller.setAvatar({ enabled: !controller.viewState.avatar.enabled }));
   reg('opencodeHub.restartEngine', () => controller.restartEngine());
   reg('opencodeHub.showLogs', () => log.show());
+  reg('opencodeHub.getStarted', () => vscode.commands.executeCommand('workbench.action.openWalkthrough', `${context.extension.id}#gettingStarted`, false));
+  reg('opencodeHub.sendFeedback', async () => {
+    await host.focusView();
+    controller.showPanel('feedback');
+  });
+  reg('opencodeHub.doctor', async () => {
+    await host.focusView();
+    await controller.send('/doctor');
+  });
   reg('opencodeHub.abort', () => controller.abort());
   reg('opencodeHub.moveToRight', () => host.moveView('right'));
   reg('opencodeHub.moveToLeft', () => host.moveView('left'));
@@ -243,6 +292,39 @@ export async function activate(context: vscode.ExtensionContext): Promise<Openco
     controller.addAttachment(att);
     view.post({ type: 'focusInput' });
   });
+  reg('opencodeHub.explainSelection', () => askAboutCode(selectionAttachment(), 'Explain the attached code: what it does, how it does it, and anything in it that looks risky or surprising.'));
+  reg('opencodeHub.fixSelection', async (uri?: vscode.Uri, range?: vscode.Range, problem?: string) => {
+    // From the lightbulb: a document, the range of the problem and its message. From the menu: the selection.
+    if (uri instanceof vscode.Uri && range instanceof vscode.Range) {
+      const doc = await vscode.workspace.openTextDocument(uri);
+      return askAboutCode(rangeAttachment(doc, range), fixPrompt(vscode.workspace.asRelativePath(uri, false), range.start.line + 1, problem));
+    }
+    const editor = vscode.window.activeTextEditor;
+    const att = selectionAttachment();
+    if (!editor || !att) return void vscode.window.showInformationMessage('Select the code to fix first.');
+    const problems = vscode.languages.getDiagnostics(editor.document.uri).filter((d) => d.range.intersection(editor.selection) && d.severity <= vscode.DiagnosticSeverity.Warning);
+    return askAboutCode(att, fixPrompt(vscode.workspace.asRelativePath(editor.document.uri, false), editor.selection.start.line + 1, problems.map(describeProblem).join('\n') || undefined));
+  });
+  context.subscriptions.push(
+    vscode.languages.registerCodeActionsProvider(
+      { scheme: 'file' },
+      {
+        provideCodeActions: (doc, _range, ctx) => {
+          if (!cfg().get('editor.quickFix', true) || !vscode.workspace.isTrusted) return [];
+          return ctx.diagnostics
+            .filter((d) => d.severity <= vscode.DiagnosticSeverity.Warning)
+            .slice(0, 3)
+            .map((d) => {
+              const action = new vscode.CodeAction(`Fix with OpenCode Hub: ${truncateLine(d.message, 60)}`, vscode.CodeActionKind.QuickFix);
+              action.diagnostics = [d];
+              action.command = { command: 'opencodeHub.fixSelection', title: 'Fix with OpenCode Hub', arguments: [doc.uri, d.range, describeProblem(d)] };
+              return action;
+            });
+        },
+      },
+      { providedCodeActionKinds: [vscode.CodeActionKind.QuickFix] },
+    ),
+  );
   reg('opencodeHub.attachFiles', async (uri?: vscode.Uri, uris?: vscode.Uri[]) => {
     const picked = (uris?.length ? uris : uri ? [uri] : []).filter((u) => u.scheme === 'file').map((u) => u.fsPath);
     await host.focusView();
@@ -292,6 +374,24 @@ function shutdownEngines(): Promise<void> {
 /** VS Code waits for this promise (a few seconds) on shutdown: running replies are saved to disk. */
 export function deactivate(): Promise<void> {
   return shutdownEngines();
+}
+
+function truncateLine(text: string, max: number): string {
+  const one = text.replace(/\s+/g, ' ').trim();
+  return one.length > max ? `${one.slice(0, max - 1).trimEnd()}…` : one;
+}
+
+/** "ts(2322): Type 'string' is not assignable to type 'number'." */
+function describeProblem(d: vscode.Diagnostic): string {
+  const code = typeof d.code === 'object' ? d.code.value : d.code;
+  const origin = [d.source, code !== undefined && code !== '' ? `(${code})` : ''].filter(Boolean).join('');
+  return `${origin ? `${origin}: ` : ''}${truncateLine(d.message, 600)}`;
+}
+
+function fixPrompt(file: string, line: number, problem: string | undefined): string {
+  return problem
+    ? `Fix this problem in ${file}, around line ${line}:\n\n${problem}\n\nThe code is attached. Find the cause, change only what is needed, and say briefly what you changed.`
+    : `Find and fix what is wrong in the attached code from ${file} (around line ${line}). Change only what is needed, and say briefly what you changed.`;
 }
 
 function score(relative: string, q: string): number {

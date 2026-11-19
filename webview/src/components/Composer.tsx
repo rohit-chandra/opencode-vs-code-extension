@@ -1,5 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks';
 import { filterCommands } from '../../../src/core/slashCommands';
+import { providerBrand } from '../../../src/shared/providerColors';
 import type { ViewState } from '../../../src/shared/protocol';
 import { ENGINE_LABELS } from '../../../src/shared/types';
 import type { Attachment, EngineId, SlashCommand } from '../../../src/shared/types';
@@ -44,6 +45,7 @@ export function droppedPaths(dt: DataTransfer): string[] {
 }
 
 export function Composer({ s, onOpenPanel }: { s: ViewState; onOpenPanel: (p: 'models') => void }) {
+  const brand = s.providerColors ? providerBrand(s.engine, s.model) : undefined;
   const [text, setText] = useState('');
   const [popup, setPopup] = useState<Popup>();
   const [menu, setMenu] = useState<'engine' | 'agent' | 'approvals' | undefined>();
@@ -268,7 +270,7 @@ export function Composer({ s, onOpenPanel }: { s: ViewState; onOpenPanel: (p: 'm
           )}
         </span>
 
-        <button type="button" class="pill model" title={s.model ? `${s.model.providerId}/${s.model.modelId}` : 'Choose a model'} onClick={() => onOpenPanel('models')}>
+        <button type="button" class="pill model" title={s.model ? `${s.model.providerId}/${s.model.modelId}${brand ? ` · ${brand.label}` : ''}` : 'Choose a model'} onClick={() => onOpenPanel('models')}>
           <span class="pill-text">{modelInfo?.name ?? s.model?.modelId ?? 'Choose model'}</span>
           <IconChevron size={11} />
         </button>
@@ -338,13 +340,14 @@ function SessionTokens({ s }: { s: ViewState }) {
   const total = tokensAll(u);
   if (!total) return null;
   const replies = s.sessionUsage!.messages;
-  const label = `This session: ${tokensIn(u).toLocaleString()} tokens in, ${tokensOut(u).toLocaleString()} out${u.cost ? `, ${money(u.cost)}` : ''} over ${replies} ${replies === 1 ? 'reply' : 'replies'}. Click for details.`;
+  const label = `This session: ${tokensIn(u).toLocaleString()} tokens in, ${tokensOut(u).toLocaleString()} out${u.cost ? `, ${money(u.cost)}` : ''} over ${replies} ${replies === 1 ? 'reply' : 'replies'}.${u.cost ? ' Cost is what the engine reported, or an estimate from list prices.' : ''} Click for details.`;
   return (
-    <button type="button" class="pill session-tokens" title={label} aria-label={label} onClick={() => send({ type: 'send', text: '/usage' })}>
+    <button type="button" class={`pill session-tokens ${u.cost > 0 ? 'has-cost' : ''}`} title={label} aria-label={label} onClick={() => send({ type: 'send', text: '/usage' })}>
       <IconChart size={12} />
       <span class="pill-text">
-        {compact(total)}
-        {u.cost > 0 && <span class="session-cost"> · {money(u.cost)}</span>}
+        <span class="session-count">{compact(total)}</span>
+        {u.cost > 0 && <span class="session-sep"> · </span>}
+        {u.cost > 0 && <span class="session-cost">{money(u.cost)}</span>}
       </span>
     </button>
   );

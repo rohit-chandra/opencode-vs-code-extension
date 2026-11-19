@@ -1,14 +1,17 @@
 import type { EngineContext } from '../../core/engine';
 import { attachmentsAsText, resolveAttachment } from '../../core/attachments';
+import { catalogProviderFor, listPrice } from '../../core/listPrices';
+import type { Pricing } from '../../core/listPrices';
 import { LocalEngine } from '../../core/localEngine';
 import type { Turn } from '../../core/localEngine';
 import { estimateCost } from '../../core/usageLedger';
 import type { McpManager, McpTool } from '../../mcp/manager';
-import type { EngineCapabilities, McpServerInfo, ModelInfo, ProviderInfo } from '../../shared/types';
+import type { EngineCapabilities, McpServerInfo, ModelInfo, ModelRef, ProviderInfo } from '../../shared/types';
+import { dropOldestTurns, isContextOverflow, startForBudget } from './context';
 import { resolveProvider, secretKeyFor } from './presets';
 import type { ProviderConfig } from './presets';
 import { fetchModelIds, streamAnthropic, streamOpenAi } from './wire';
-import type { WireBlock, WireMessage } from './wire';
+import type { StreamResult, WireBlock, WireMessage } from './wire';
 
 const MAX_TOOL_ROUNDS = 30;
 const MODEL_CACHE_MS = 10 * 60_000;
@@ -109,6 +112,13 @@ export class DirectEngine extends LocalEngine {
     await this.mcp.setEnabled(name, enabled);
   }
 
+  /** Prices set in settings win; otherwise the list price of a known provider. Local servers cost nothing. */
+  protected override listPricing(model: ModelRef): Pricing | undefined {
+    const p = this.providers().find((x) => x.id === model.providerId);
+    if (!p || p.keyless) return undefined;
+    return p.pricing?.[model.modelId] ?? listPrice(catalogProviderFor(p.baseUrl), model.modelId);
+  }
+
   protected async runTurn(turn: Turn): Promise<void> {
     const { session, input, assistant, signal } = turn;
     if (!input.model) throw new Error('Pick a model first (/model).');
@@ -131,11 +141,39 @@ export class DirectEngine extends LocalEngine {
     const stream = provider.type === 'anthropic' ? streamAnthropic : streamOpenAi;
     const pricing = provider.pricing?.[input.model.modelId];
 
+    // Where sending starts. Older turns stay in the saved conversation and on screen; they are
+    // only left out of the request once the model's context window is full.
+    let start = Math.min(Math.max(0, Number(session.meta.wireStart) || 0), wire.length - 1);
+    let told = false;
+    const leftOut = (next: number) => {
+      start = next;
+      session.meta.wireStart = next;
+      if (!told) assistant.notice('info', 'This conversation no longer fits in the model\'s context window, so the oldest messages were left out of the request. Start a new session (/new) for a fresh context.');
+      told = true;
+    };
+    const budget = Math.floor(this.ctx.config<number>('direct.maxContextTokens', 0));
+    if (budget > 0) {
+      const fit = startForBudget(wire, budget, start);
+      if (fit > start) leftOut(fit);
+    }
+
     for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
-      const result = await stream(
-        { baseUrl: provider.baseUrl, apiKey, headers: provider.headers, model: input.model.modelId, system, messages: wire, tools: tools.length ? tools : undefined, signal },
-        { onText: (d) => assistant.text(d), onReasoning: (d) => assistant.reasoning(d) },
-      );
+      let result: StreamResult;
+      for (;;) {
+        try {
+          result = await stream(
+            { baseUrl: provider.baseUrl, apiKey, headers: provider.headers, model: input.model.modelId, system, messages: start ? wire.slice(start) : wire, tools: tools.length ? tools : undefined, signal },
+            { onText: (d) => assistant.text(d), onReasoning: (d) => assistant.reasoning(d) },
+          );
+          break;
+        } catch (err) {
+          if (signal.aborted || !isContextOverflow(err)) throw err;
+          const next = dropOldestTurns(wire, start);
+          if (next === start) throw new Error(`${err instanceof Error ? err.message : String(err)} Your last message (with its attachments and tool results) is larger than the model's context window on its own. Attach less, or pick a model with a larger window.`, { cause: err });
+          this.ctx.log.info(`Direct BYOK: context window full for ${input.model.modelId}, leaving out messages before #${next}`);
+          leftOut(next);
+        }
+      }
       const usage = result.usage;
       assistant.addUsage({ ...usage, cost: usage.cost || estimateCost(usage, pricing) });
 

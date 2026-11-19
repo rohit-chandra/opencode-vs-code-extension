@@ -2,10 +2,11 @@
   "name": "opencode-hub",
   "displayName": "OpenCode Hub — BYOK AI Chat",
   "description": "Open-source chat for VS Code that works with opencode first, plus Claude Code, Codex (ChatGPT), GitHub Copilot and any OpenAI-compatible or Anthropic model with your own keys. Sessions, /commands, file attachments, MCP toggles, token usage stats and a 3D companion.",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "publisher": "rohit-chandra",
   "license": "MIT",
   "private": true,
+  "pricing": "Free",
   "repository": {
     "type": "git",
     "url": "https://github.com/rohit-chandra/opencode-vs-code-extension.git"
@@ -14,6 +15,7 @@
     "url": "https://github.com/rohit-chandra/opencode-vs-code-extension/issues"
   },
   "homepage": "https://github.com/rohit-chandra/opencode-vs-code-extension#readme",
+  "qna": "https://github.com/rohit-chandra/opencode-vs-code-extension/issues",
   "icon": "media/icon.png",
   "galleryBanner": {
     "color": "#0f1220",
@@ -177,6 +179,16 @@
         "category": "OpenCode Hub"
       },
       {
+        "command": "opencodeHub.explainSelection",
+        "title": "Explain Selection",
+        "category": "OpenCode Hub"
+      },
+      {
+        "command": "opencodeHub.fixSelection",
+        "title": "Fix Selection",
+        "category": "OpenCode Hub"
+      },
+      {
         "command": "opencodeHub.toggleAvatar",
         "title": "Toggle 3D Companion",
         "category": "OpenCode Hub"
@@ -190,6 +202,24 @@
         "command": "opencodeHub.showLogs",
         "title": "Show Logs",
         "category": "OpenCode Hub"
+      },
+      {
+        "command": "opencodeHub.getStarted",
+        "title": "Get Started",
+        "category": "OpenCode Hub",
+        "icon": "$(rocket)"
+      },
+      {
+        "command": "opencodeHub.sendFeedback",
+        "title": "Send Feedback or Report a Problem…",
+        "category": "OpenCode Hub",
+        "icon": "$(feedback)"
+      },
+      {
+        "command": "opencodeHub.doctor",
+        "title": "Run Doctor (Check Engines and Environment)",
+        "category": "OpenCode Hub",
+        "icon": "$(pulse)"
       },
       {
         "command": "opencodeHub.abort",
@@ -291,9 +321,34 @@
           "command": "opencodeHub.zoomReset",
           "when": "view == opencodeHub.chat",
           "group": "3_zoom@3"
+        },
+        {
+          "command": "opencodeHub.doctor",
+          "when": "view == opencodeHub.chat",
+          "group": "4_help@1"
+        },
+        {
+          "command": "opencodeHub.sendFeedback",
+          "when": "view == opencodeHub.chat",
+          "group": "4_help@2"
+        },
+        {
+          "command": "opencodeHub.getStarted",
+          "when": "view == opencodeHub.chat",
+          "group": "4_help@0"
         }
       ],
       "editor/context": [
+        {
+          "command": "opencodeHub.explainSelection",
+          "when": "editorHasSelection",
+          "group": "opencodeHub@0"
+        },
+        {
+          "command": "opencodeHub.fixSelection",
+          "when": "editorHasSelection && !editorReadonly",
+          "group": "opencodeHub@0"
+        },
         {
           "command": "opencodeHub.attachSelection",
           "when": "editorHasSelection",
@@ -308,6 +363,16 @@
         {
           "command": "opencodeHub.attachFiles",
           "group": "opencodeHub@1"
+        }
+      ],
+      "commandPalette": [
+        {
+          "command": "opencodeHub.explainSelection",
+          "when": "editorHasSelection"
+        },
+        {
+          "command": "opencodeHub.fixSelection",
+          "when": "editorHasSelection"
         }
       ]
     },
@@ -607,11 +672,27 @@
           "default": true,
           "description": "Show the current session's token usage in the status bar."
         },
+        "opencodeHub.usage.estimateCost": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "Estimate what each reply costs when the engine reports tokens but no cost (Codex, and Direct BYOK providers such as OpenAI, Anthropic, Gemini, Groq, Mistral, DeepSeek, xAI, Together AI and Hugging Face). The estimate uses public list prices bundled with the extension; prices under `pricing` in `opencodeHub.providers` take precedence. With a subscription you are not billed per token, so the figure is what the same tokens would cost through the API."
+        },
         "opencodeHub.systemPrompt": {
           "type": "string",
           "default": "",
           "editPresentation": "multilineText",
           "description": "Extra system prompt for the Direct BYOK and Copilot engines."
+        },
+        "opencodeHub.direct.maxContextTokens": {
+          "type": "number",
+          "default": 0,
+          "minimum": 0,
+          "markdownDescription": "**Direct BYOK:** send at most about this many tokens of earlier conversation with each request. `0` (default) sends the whole conversation and leaves out the oldest messages only when the provider reports that the model's context window is full. Set a number for local servers that cut long prompts without saying so (for example `8000` for an 8k model in Ollama or LM Studio). The newest message is always sent whole."
+        },
+        "opencodeHub.editor.quickFix": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "Offer **Fix with OpenCode Hub** in the lightbulb menu on errors and warnings. The entries appear once the chat has been opened in the window."
         },
         "opencodeHub.chat.zoom": {
           "type": "number",
@@ -619,9 +700,93 @@
           "minimum": 0.8,
           "maximum": 1.6,
           "description": "Text scale of the chat view. 1 follows VS Code's font size."
+        },
+        "opencodeHub.chat.providerColors": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "Tint the chat with the colour of the model's maker, so you can see at a glance who you are talking to: Claude orange, OpenAI green, Gemini blue, Copilot purple, local models grey. Shown as a strip along the top of the chat, the message box's border and a dot under the companion."
         }
       }
-    }
+    },
+    "walkthroughs": [
+      {
+        "id": "gettingStarted",
+        "title": "Get started with OpenCode Hub",
+        "description": "Connect an engine, send your first message and learn the shortcuts.",
+        "steps": [
+          {
+            "id": "open",
+            "title": "Open the chat",
+            "description": "The chat lives in the side bar. You can dock it on the right or open it as an editor tab.\n[Open Chat](command:opencodeHub.focus)",
+            "media": {
+              "markdown": "media/walkthrough/open.md"
+            },
+            "completionEvents": [
+              "onCommand:opencodeHub.focus",
+              "onView:opencodeHub.chat"
+            ]
+          },
+          {
+            "id": "engine",
+            "title": "Choose an engine",
+            "description": "opencode is the default. Claude Code, Codex, Direct BYOK and Copilot are one command away.\n[Select Engine](command:opencodeHub.selectEngine)",
+            "media": {
+              "markdown": "media/walkthrough/engine.md"
+            },
+            "completionEvents": [
+              "onCommand:opencodeHub.selectEngine"
+            ]
+          },
+          {
+            "id": "signin",
+            "title": "Sign in, or add a key",
+            "description": "Use your Claude or ChatGPT subscription, or your own API keys. Keys stay in your keychain.\n[Sign In](command:opencodeHub.signIn)\n[Add a BYOK Provider](command:opencodeHub.manageProviders)",
+            "media": {
+              "markdown": "media/walkthrough/signin.md"
+            },
+            "completionEvents": [
+              "onCommand:opencodeHub.signIn",
+              "onCommand:opencodeHub.manageProviders"
+            ]
+          },
+          {
+            "id": "doctor",
+            "title": "Check that everything works",
+            "description": "See which engines are installed and ready on this machine.\n[Run Doctor](command:opencodeHub.doctor)",
+            "media": {
+              "markdown": "media/walkthrough/doctor.md"
+            },
+            "completionEvents": [
+              "onCommand:opencodeHub.doctor"
+            ]
+          },
+          {
+            "id": "code",
+            "title": "Ask about your code",
+            "description": "Explain or fix a selection from the editor, and attach files with @.\n[Explain Selection](command:opencodeHub.explainSelection)",
+            "media": {
+              "markdown": "media/walkthrough/code.md"
+            },
+            "completionEvents": [
+              "onCommand:opencodeHub.explainSelection",
+              "onCommand:opencodeHub.fixSelection",
+              "onCommand:opencodeHub.attachSelection"
+            ]
+          },
+          {
+            "id": "feedback",
+            "title": "Tell us what is missing",
+            "description": "Report a bug or share an idea. It opens a pre-filled GitHub issue that you review before it is sent.\n[Send Feedback](command:opencodeHub.sendFeedback)",
+            "media": {
+              "markdown": "media/walkthrough/feedback.md"
+            },
+            "completionEvents": [
+              "onCommand:opencodeHub.sendFeedback"
+            ]
+          }
+        ]
+      }
+    ]
   },
   "scripts": {
     "build": "node scripts/build.mjs",
@@ -636,7 +801,10 @@
     "test:integration": "node test/integration/run.mjs",
     "package": "npm run build:prod && vsce package --no-dependencies -o opencode-hub.vsix",
     "vscode:prepublish": "npm run build:prod",
-    "icon": "node scripts/render-icon.mjs"
+    "icon": "node scripts/render-icon.mjs",
+    "diagrams": "node scripts/render-diagrams.mjs",
+    "stats": "node scripts/stats.mjs",
+    "prices": "node scripts/update-prices.mjs"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",

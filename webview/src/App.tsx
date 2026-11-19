@@ -1,9 +1,10 @@
 import { useEffect, useState } from 'preact/hooks';
+import { providerBrand } from '../../src/shared/providerColors';
 import { ENGINE_LABELS } from '../../src/shared/types';
 import { Avatar } from './components/Avatar';
 import { Composer, droppedPaths } from './components/Composer';
 import { MessageList } from './components/Messages';
-import { McpPanel, ModelsPanel, SessionsPanel, UsagePanel } from './components/Panels';
+import { FeedbackPanel, McpPanel, ModelsPanel, SessionsPanel, UsagePanel } from './components/Panels';
 import type { PanelName } from './components/Panels';
 import { Requests } from './components/Requests';
 import { money, tokensIn, tokensOut } from './format';
@@ -105,6 +106,13 @@ export function App() {
   useEffect(() => {
     document.documentElement.style.setProperty('--oh-zoom', String(s.zoom || 1));
   }, [s.zoom]);
+  // The frame takes the colour of the model's maker, so the provider is visible at a glance.
+  const brand = s.providerColors ? providerBrand(s.engine, s.model) : undefined;
+  useEffect(() => {
+    const root = document.documentElement;
+    if (brand) root.style.setProperty('--oh-provider', brand.color);
+    else root.style.removeProperty('--oh-provider');
+  }, [brand?.color]);
 
   useEffect(() => {
     if (s.panel.nonce) setPanel(s.panel.name);
@@ -144,7 +152,8 @@ export function App() {
 
   return (
     <div
-      class={`app ${empty ? 'is-empty' : 'has-messages'} ${s.avatar.enabled ? 'with-avatar' : 'no-avatar'}`}
+      class={`app ${empty ? 'is-empty' : 'has-messages'} ${s.avatar.enabled ? 'with-avatar' : 'no-avatar'} ${brand ? 'branded' : ''}`}
+      data-provider={brand?.id}
       onDragOver={(e) => {
         e.preventDefault();
         setDragging(true);
@@ -196,7 +205,12 @@ export function App() {
               <div class="stage-caption" aria-live="polite">
                 {caption}
               </div>
-              {!empty && <div class="stage-sub">{[ENGINE_LABELS[s.engine], s.model?.modelId].filter(Boolean).join(', ')}</div>}
+              {!empty && (
+                <div class="stage-sub">
+                  {brand && <span class="brand-dot" title={brand.label} aria-label={brand.label} />}
+                  {[ENGINE_LABELS[s.engine], s.model?.modelId].filter(Boolean).join(', ')}
+                </div>
+              )}
             </div>
           </div>
         )}
@@ -274,6 +288,7 @@ export function App() {
         {panel === 'models' && <ModelsPanel s={s} onClose={() => setPanel('none')} />}
         {panel === 'mcp' && <McpPanel s={s} onClose={() => setPanel('none')} />}
         {panel === 'usage' && <UsagePanel s={s} onClose={() => setPanel('none')} />}
+        {panel === 'feedback' && <FeedbackPanel key={s.panel.nonce} s={s} onClose={() => setPanel('none')} />}
 
         {toast && (
           <div class={`toast ${toast.level}`} role={toast.level === 'error' ? 'alert' : 'status'}>

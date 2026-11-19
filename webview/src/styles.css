@@ -1585,6 +1585,7 @@ kbd {
 /* Retry after a failed or stopped reply */
 .retry-row {
   display: flex;
+  gap: 6px;
   padding: 2px 0 8px;
 }
 .btn.retry {
@@ -1683,10 +1684,11 @@ kbd {
   width: 52px;
 }
 
-/* A usual side bar: the model name keeps its room; "Ask" and the session cost become tooltips. Auto stays labelled. */
+/* A usual side bar: the model name keeps its room. "Ask" becomes a tooltip, and a session with a known cost shows the dollars (tokens move to the tooltip). Auto stays labelled. */
 @media (max-width: 520px) {
   .pill.approvals.ask .pill-text,
-  .session-cost {
+  .session-tokens.has-cost .session-count,
+  .session-tokens.has-cost .session-sep {
     display: none;
   }
 }
@@ -1742,4 +1744,115 @@ kbd {
 }
 .engine-tag.here {
   border-color: var(--oh-accent);
+}
+
+/* Feedback form */
+.field {
+  display: block;
+  margin-bottom: 10px;
+}
+.field-label {
+  display: block;
+  margin-bottom: 3px;
+  color: var(--oh-muted);
+  font-size: 0.92em;
+}
+.field-input {
+  display: block;
+  width: 100%;
+  padding: 5px 8px;
+  border: 1px solid var(--vscode-input-border, var(--oh-border));
+  border-radius: 4px;
+  outline: 0;
+  background: var(--vscode-input-background);
+  color: var(--vscode-input-foreground, inherit);
+  font: inherit;
+}
+.field-input:focus {
+  border-color: var(--vscode-focusBorder, var(--oh-accent));
+}
+.field-input::placeholder {
+  color: var(--vscode-input-placeholderForeground, var(--oh-muted));
+}
+.feedback-text {
+  min-height: 7em;
+  resize: vertical;
+  line-height: 1.45;
+}
+.check {
+  display: flex;
+  align-items: flex-start;
+  gap: 7px;
+  cursor: pointer;
+}
+.check input {
+  margin: 0.2em 0 0;
+  accent-color: var(--vscode-focusBorder, var(--oh-accent));
+}
+.diagnostics {
+  margin: 6px 0 0 20px;
+  color: var(--oh-muted);
+}
+.diagnostics summary {
+  cursor: pointer;
+}
+.diagnostics pre {
+  margin-top: 6px;
+  padding: 8px 10px;
+  border: 1px solid var(--oh-border);
+  border-radius: var(--oh-radius);
+  font-family: var(--vscode-editor-font-family, monospace);
+  font-size: 0.9em;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.sheet-actions {
+  display: flex;
+  gap: 6px;
+  margin-top: 4px;
+}
+
+/* Messages written by the extension itself (/help, /doctor): a card that can be closed */
+.msg.assistant.local {
+  position: relative;
+  padding: 8px 30px 8px 10px;
+  border: 1px solid var(--oh-border);
+  border-radius: var(--oh-radius);
+  background: var(--oh-surface);
+}
+.msg-close {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+}
+
+/* Provider colour: a strip along the top of the chat, the message box's border, and a dot
+   by the model name. --oh-provider is set from the model in use (Claude orange, OpenAI green…). */
+.app.branded {
+  border-top: 2px solid var(--oh-provider);
+  transition: border-color 0.25s ease;
+}
+.app.branded .input-box {
+  border-color: color-mix(in srgb, var(--oh-provider) 55%, var(--vscode-input-border, var(--oh-border)));
+  transition: border-color 0.25s ease;
+}
+.app.branded .input-box:focus-within {
+  border-color: var(--oh-provider);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--oh-provider) 35%, transparent);
+}
+.brand-dot {
+  display: inline-block;
+  flex: none;
+  width: 7px;
+  height: 7px;
+  margin-right: 6px;
+  border-radius: 50%;
+  background: var(--oh-provider);
+  vertical-align: 1px;
+}
+@media (prefers-reduced-motion: reduce) {
+  .app.branded,
+  .app.branded .input-box {
+    transition: none;
+  }
 }

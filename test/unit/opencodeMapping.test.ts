@@ -101,6 +101,10 @@ describe('toFilePart', () => {
 
   it('sends images and unsaved text inline', () => {
     expect(toFilePart({ id: '3', kind: 'image', name: 'p.png', mime: 'image/png', path: file, dataUrl: 'data:image/png;base64,AAAA' }).url).toBe('data:image/png;base64,AAAA');
+    // Text with no file on disk (dropped from outside the editor, or a session digest) is sent as content, never as a path to read.
+    const loose = toFilePart({ id: '9', kind: 'file', name: 'Session: Fix the login bug', mime: 'text/markdown', text: 'notes ✓' });
+    expect(loose.url).toBe(`data:text/plain;base64,${Buffer.from('notes ✓', 'utf8').toString('base64')}`);
+    expect(loose).toMatchObject({ mime: 'text/plain', filename: 'Session: Fix the login bug' });
     const inline = toFilePart({ id: '4', kind: 'selection', name: 'Untitled-1:1-2', mime: 'text/plain', text: 'héllo' });
     expect(inline.url).toBe(`data:text/plain;base64,${Buffer.from('héllo').toString('base64')}`);
     expect(toFilePart({ id: '5', kind: 'file', name: 'src/', mime: 'application/x-directory', path: file }).mime).toBe('application/x-directory');

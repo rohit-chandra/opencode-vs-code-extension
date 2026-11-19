@@ -10,6 +10,7 @@ export const BUILTIN_COMMANDS: SlashCommand[] = [
   { name: 'mcp', description: 'Show MCP servers and toggle them', source: 'builtin' },
   { name: 'usage', description: 'Show token usage for this session and overall', source: 'builtin' },
   { name: 'attach', description: 'Attach files to the next message', source: 'builtin' },
+  { name: 'context', description: 'Bring another session into this chat as condensed context', source: 'builtin', argumentHint: '[title]' },
   { name: 'compact', description: 'Summarize the conversation to free up context', source: 'builtin' },
   { name: 'undo', description: 'Revert the last message and its file changes', source: 'builtin' },
   { name: 'redo', description: 'Restore reverted messages', source: 'builtin' },
@@ -26,6 +27,8 @@ export const BUILTIN_COMMANDS: SlashCommand[] = [
   { name: 'avatar', description: 'Show, hide or restyle the 3D companion', source: 'builtin', argumentHint: '[on|off|buddy|dots]' },
   { name: 'move', description: 'Dock the chat left, right, or open it as an editor tab', source: 'builtin', argumentHint: '[left|right|editor]' },
   { name: 'zoom', description: 'Make the chat text larger or smaller', source: 'builtin', argumentHint: '[in|out|reset|120%]' },
+  { name: 'feedback', description: 'Report a bug or share an idea (opens a pre-filled GitHub issue)', source: 'builtin', argumentHint: '[bug|idea|other] [text]' },
+  { name: 'doctor', description: 'Check versions, your system and which engines are working', source: 'builtin' },
   { name: 'clear', description: 'Clear the chat (starts a new session)', source: 'builtin' },
   { name: 'help', description: 'List available commands', source: 'builtin' },
 ];

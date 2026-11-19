@@ -68,15 +68,21 @@ jobs:
           if-no-files-found: error
 
   publish:
-    # Optional stores. The tokens are only exposed to this job, and each step runs only
-    # when its token is configured as a repository secret.
+    # Stores. Each step runs only when it has been set up (see docs/MAINTAINING.md):
+    #   Visual Studio Marketplace  repository variable MARKETPLACE_TRUSTED_PUBLISHING = true
+    #                              (Trusted Publishing: no stored token), or secret VSCE_PAT
+    #   Open VSX                   secret OVSX_PAT
     needs: release
     runs-on: ubuntu-latest
     permissions:
       contents: read
+      # Lets vsce prove to the Marketplace that this run comes from this repository's
+      # release workflow (OpenID Connect). No long-lived token is stored anywhere.
+      id-token: write
     env:
       VSCE_PAT: ${{ secrets.VSCE_PAT }}
       OVSX_PAT: ${{ secrets.OVSX_PAT }}
+      TRUSTED_PUBLISHING: ${{ vars.MARKETPLACE_TRUSTED_PUBLISHING }}
     steps:
       - uses: actions/download-artifact@v8
         with:
@@ -84,9 +90,15 @@ jobs:
       - uses: actions/setup-node@v7
         with:
           node-version: '22'
-      - name: Publish to the Visual Studio Marketplace
-        if: env.VSCE_PAT != ''
-        run: npx --yes @vscode/vsce publish --packagePath opencode-hub-*.vsix
+      - name: Publish to the Visual Studio Marketplace (Trusted Publishing)
+        if: env.TRUSTED_PUBLISHING == 'true'
+        run: npx --yes @vscode/vsce publish --oidc --skip-duplicate --packagePath opencode-hub-*.vsix
+      - name: Publish to the Visual Studio Marketplace (personal access token)
+        if: env.TRUSTED_PUBLISHING != 'true' && env.VSCE_PAT != ''
+        run: npx --yes @vscode/vsce publish --skip-duplicate --packagePath opencode-hub-*.vsix
       - name: Publish to Open VSX
         if: env.OVSX_PAT != ''
-        run: npx --yes ovsx publish opencode-hub-*.vsix -p "$OVSX_PAT"
+        run: npx --yes ovsx publish opencode-hub-*.vsix --skip-duplicate -p "$OVSX_PAT"
+      - name: Say what was skipped
+        if: env.TRUSTED_PUBLISHING != 'true' && env.VSCE_PAT == ''
+        run: echo "::notice::Not published to the Visual Studio Marketplace, because neither Trusted Publishing nor VSCE_PAT is set up. See docs/MAINTAINING.md."

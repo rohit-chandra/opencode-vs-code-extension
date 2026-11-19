@@ -7,6 +7,7 @@ import { ClaudeCodeEngine } from '../../src/engines/cli/claudeCode';
 import { CodexEngine } from '../../src/engines/cli/codex';
 import type { EngineId } from '../../src/shared/types';
 import { ChatController } from '../../src/ui/controller';
+import { multiAttachments } from '../helpers/attachments';
 import { MemoryStore, findBin, makeContext, record } from '../helpers/context';
 import { FakeHost } from '../helpers/fakeHost';
 import type { TestContext } from '../helpers/context';
@@ -82,6 +83,21 @@ describe.skipIf(!claudeBin)('Claude Code engine (real `claude` CLI + mock Anthro
     const commands = await engine.listCommands();
     expect(commands.length).toBeGreaterThan(3);
     expect(commands.every((c) => c.source === 'engine')).toBe(true);
+  });
+
+  it('passes several attachments to Claude Code with the prompt', async () => {
+    const { attachments, paths } = multiAttachments(path.join(project, 'multi'));
+    const rec = record(engine);
+    const session = await engine.createSession();
+    const before = mock.log.length;
+    await engine.sendPrompt(session.id, { text: 'compare these three', attachments, model: { providerId: 'claude-code', modelId: 'sonnet' } });
+    await rec.waitIdle(session.id, 100_000);
+    expect(rec.messages(session.id)[1].error).toBeUndefined();
+    // Claude Code reads files with its own tools: it gets their paths, and the selected lines inline.
+    const sent = JSON.stringify(mock.log.slice(before).filter((l) => l.path === '/messages').map((l) => l.body.messages));
+    expect(sent).toContain('compare these three');
+    for (const p of paths) expect(sent).toContain(JSON.stringify(p).slice(1, -1));
+    expect(sent).toContain('GAMMA_MARKER');
   });
 
   it('resumes the same Claude Code conversation on the next turn', async () => {
@@ -317,6 +333,20 @@ describe.skipIf(!codexBin)('Codex engine (real `codex` CLI + mock Responses API)
     expect(assistant.error).toBeUndefined();
     expect(assistant.parts.find((p) => p.type === 'text')).toMatchObject({ text: 'MOCK[mock-small]: hello codex' });
     expect(assistant.usage).toMatchObject({ input: 100, output: 30, cacheRead: 20, reasoning: 0 });
+  });
+
+  it('passes several attachments to Codex with the prompt', async () => {
+    const { attachments, paths } = multiAttachments(path.join(ctx.cwd()!, 'multi'));
+    const rec = record(engine);
+    const session = await engine.createSession();
+    const before = mock.log.length;
+    await engine.sendPrompt(session.id, { text: 'compare these three', attachments, model: { providerId: 'codex', modelId: 'default' } });
+    await rec.waitIdle(session.id, 100_000);
+    expect(rec.messages(session.id)[1].error).toBeUndefined();
+    const sent = JSON.stringify(mock.log.slice(before).map((l) => l.body));
+    expect(sent).toContain('compare these three');
+    for (const p of paths) expect(sent).toContain(JSON.stringify(p).slice(1, -1));
+    expect(sent).toContain('GAMMA_MARKER');
   });
 
   it('resumes the same Codex thread on the next turn', async () => {

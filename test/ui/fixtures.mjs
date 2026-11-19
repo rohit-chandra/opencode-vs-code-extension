@@ -52,10 +52,13 @@ export const base = {
   usage: undefined,
   avatar: { enabled: true, style: 'buddy' },
   zoom: 1,
+  providerColors: true,
   trusted: true,
   canRetry: false,
   recentModels: [],
   panel: { name: 'none', nonce: 0 },
+  diagnostics: '- OpenCode Hub: 0.5.0\n- Editor: Visual Studio Code 1.106.0 (desktop)\n- OS: macOS arm64 (25.1.0)\n- Engine: opencode, ready (1.2.0)\n- Model: anthropic/claude-sonnet-5-5\n- Approvals: ask\n- Companion: buddy (webgl)\n- Workspace trusted: yes',
+  feedbackDraft: undefined,
   notice: undefined,
   loading: false,
 };

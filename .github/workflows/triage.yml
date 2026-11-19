@@ -1,0 +1,28 @@
+name: Triage
+
+# Greets a new issue from someone outside the project and tells them what happens next.
+# No AI runs here: text from the public only meets the Claude agent after a maintainer
+# has read the issue and added the "claude-fix" label (see claude.yml).
+
+on:
+  issues:
+    types: [opened]
+
+permissions: {}
+
+jobs:
+  welcome:
+    if: "!contains(fromJSON('[\"OWNER\", \"MEMBER\", \"COLLABORATOR\"]'), github.event.issue.author_association) && github.event.issue.user.type != 'Bot'"
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+    steps:
+      - name: Comment
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ISSUE: ${{ github.event.issue.number }}
+          REPO: ${{ github.repository }}
+        run: |
+          gh issue comment "$ISSUE" --repo "$REPO" --body "Thanks for the report. A maintainer will read it soon.
+
+          If it is something the project's Claude agent can fix, the maintainer adds the \`claude-fix\` label; the agent then works on it and opens a pull request that links back here. Until then, anything that helps reproduce the problem is welcome: the steps you took, and the first lines of \`/doctor\` from the chat."

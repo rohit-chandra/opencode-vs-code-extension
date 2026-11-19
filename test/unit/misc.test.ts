@@ -1,11 +1,15 @@
 import { describe, expect, it } from 'vitest';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { attachmentsAsText, mimeForPath, resolveAttachment } from '../../src/core/attachments';
 import { newId } from '../../src/core/ids';
+import { listPrice, catalogProviderFor } from '../../src/core/listPrices';
 import { LocalSessionStore } from '../../src/core/localSessions';
-import { findExecutable, quoteWindowsArg, runCapture } from '../../src/core/process';
+import { sessionDigest } from '../../src/core/sessionDigest';
+import { estimateCost } from '../../src/core/usageLedger';
+import type { ChatMessage } from '../../src/shared/types';
+import { envWithExeDir, findExecutable, quoteWindowsArg, runCapture, terminalCommand, wellKnownDirs } from '../../src/core/process';
 
 describe('attachments', () => {
   const dir = mkdtempSync(path.join(os.tmpdir(), 'ochub-att-'));
@@ -104,6 +108,63 @@ describe('process helpers', () => {
     expect(await findExecutable('surely-not-a-real-binary-name', '', { PATH: path.dirname(process.execPath) })).toBeUndefined();
   });
 
+  it('looks where macOS and Linux installers put CLIs when the editor was started without the shell PATH', async () => {
+    const home = mkdtempSync(path.join(os.tmpdir(), 'ochub-home-'));
+    const mac = await wellKnownDirs(home, {}, 'darwin');
+    expect(mac).toEqual(expect.arrayContaining(['/opt/homebrew/bin', '/usr/local/bin', path.join(home, '.local', 'bin'), path.join(home, '.opencode', 'bin'), path.join(home, '.volta', 'bin'), path.join(home, 'Library', 'pnpm')]));
+    const linux = await wellKnownDirs(home, {}, 'linux');
+    expect(linux).toEqual(expect.arrayContaining(['/usr/local/bin', '/home/linuxbrew/.linuxbrew/bin', '/snap/bin', path.join(home, '.asdf', 'shims'), path.join(home, '.bun', 'bin')]));
+    expect(linux).not.toContain('/opt/homebrew/bin');
+    const win = await wellKnownDirs(home, { APPDATA: path.join(home, 'Roaming'), LOCALAPPDATA: path.join(home, 'Local') }, 'win32');
+    expect(win).toEqual(expect.arrayContaining([path.join(home, 'Roaming', 'npm'), path.join(home, 'Local', 'pnpm'), path.join(home, 'scoop', 'shims')]));
+    expect(win).not.toContain('/usr/local/bin');
+
+    // nvm keeps one folder per Node version; the newest one wins.
+    for (const v of ['v18.20.4', 'v22.11.0', 'v9.0.0']) mkdirSync(path.join(home, '.nvm', 'versions', 'node', v, 'bin'), { recursive: true });
+    const nvm = (await wellKnownDirs(home, {}, 'linux')).filter((d) => d.includes('.nvm'));
+    expect(nvm.map((d) => path.basename(path.dirname(d)))).toEqual(['v22.11.0', 'v18.20.4', 'v9.0.0']);
+    const custom = path.join(home, 'custom-nvm');
+    mkdirSync(path.join(custom, 'versions', 'node', 'v20.1.0', 'bin'), { recursive: true });
+    expect(await wellKnownDirs(home, { NVM_DIR: custom }, 'linux')).toContain(path.join(custom, 'versions', 'node', 'v20.1.0', 'bin'));
+
+    if (process.platform !== 'win32') {
+      const cli = path.join(home, '.nvm', 'versions', 'node', 'v22.11.0', 'bin', 'ochub-fake-cli');
+      writeFileSync(cli, '#!/bin/sh\necho ok\n');
+      chmodSync(cli, 0o755);
+      // Found even though PATH has nothing useful, as in an editor launched from the Dock.
+      expect(await findExecutable('ochub-fake-cli', '', { PATH: '/usr/bin:/bin' }, home)).toBe(cli);
+      // A file that is not executable is not a CLI.
+      const plain = path.join(home, '.local', 'bin', 'ochub-not-exec');
+      mkdirSync(path.dirname(plain), { recursive: true });
+      writeFileSync(plain, 'text');
+      chmodSync(plain, 0o644);
+      expect(await findExecutable('ochub-not-exec', '', { PATH: '/usr/bin' }, home)).toBeUndefined();
+    }
+    rmSync(home, { recursive: true, force: true });
+  });
+
+  it('puts the folder of a found CLI on PATH so its "#!/usr/bin/env node" shim can start', () => {
+    const exe = path.join(path.sep, 'home', 'u', '.nvm', 'versions', 'node', 'v22.11.0', 'bin', 'claude');
+    const dir = path.dirname(exe);
+    expect(envWithExeDir(exe, { PATH: '/usr/bin:/bin' }, 'linux').PATH).toBe(`${dir}:/usr/bin:/bin`);
+    expect(envWithExeDir(exe, {}, 'linux').PATH).toBe(dir);
+    const already = { PATH: `/usr/bin:${dir}` };
+    expect(envWithExeDir(exe, already, 'linux')).toBe(already);
+    // A bare command name is resolved by the system; nothing to add.
+    const bare = { PATH: '/usr/bin' };
+    expect(envWithExeDir('claude', bare, 'linux')).toBe(bare);
+    // Windows spells the variable "Path" and separates with semicolons.
+    const win = envWithExeDir(exe, { Path: 'C:\\Windows' }, 'win32');
+    expect(win.Path).toBe(`${dir};C:\\Windows`);
+    expect(win.PATH).toBeUndefined();
+  });
+
+  it('uses the plain command in a terminal only when the terminal can find it', () => {
+    expect(terminalCommand('claude', undefined, { PATH: '/usr/bin' }, 'linux')).toBe('claude');
+    expect(terminalCommand('claude', '/usr/local/bin/claude', { PATH: '/usr/bin:/usr/local/bin/' }, 'linux')).toBe('claude');
+    expect(terminalCommand('claude', '/home/u/.claude/local/claude', { PATH: '/usr/bin:/usr/local/bin' }, 'linux')).toBe('/home/u/.claude/local/claude');
+  });
+
   it('captures output, exit codes and spawn failures', async () => {
     const ok = await runCapture(process.execPath, ['-e', 'process.stdout.write("out"); process.stderr.write("err"); process.exit(3)']);
     expect(ok).toEqual({ code: 3, stdout: 'out', stderr: 'err' });
@@ -145,5 +206,72 @@ describe('folder-scoped state', () => {
     expect(state.get('session.direct')).toBe('ses_1');
     state.update('session.direct', undefined);
     expect(state.get('session.direct')).toBeUndefined();
+  });
+});
+
+describe('list prices', () => {
+  it('knows the price list of a provider only by its API host', () => {
+    expect(catalogProviderFor('https://api.openai.com/v1')).toBe('openai');
+    expect(catalogProviderFor('https://api.anthropic.com')).toBe('anthropic');
+    expect(catalogProviderFor('https://router.huggingface.co/v1')).toBe('huggingface');
+    expect(catalogProviderFor('https://generativelanguage.googleapis.com/v1beta/openai')).toBe('google');
+    // A local or self-hosted endpoint has no list price, whatever it is called.
+    expect(catalogProviderFor('http://localhost:11434/v1')).toBeUndefined();
+    expect(catalogProviderFor('http://gpu-box:8000/v1')).toBeUndefined();
+    expect(catalogProviderFor('not a url')).toBeUndefined();
+  });
+
+  it('finds a model despite date stamps, case and routing suffixes, and never guesses', () => {
+    const gpt = listPrice('openai', 'gpt-5-mini')!;
+    expect(gpt.input).toBeGreaterThan(0);
+    expect(gpt.output).toBeGreaterThan(gpt.input);
+    expect(listPrice('openai', 'GPT-5-mini')).toEqual(gpt);
+    expect(listPrice('openai', 'gpt-5-mini-2025-08-07')).toEqual(gpt);
+    expect(listPrice('anthropic', 'claude-haiku-4-5-latest')).toEqual(listPrice('anthropic', 'claude-haiku-4-5'));
+    expect(listPrice('anthropic', 'claude-haiku-4-5')!.cacheRead).toBeGreaterThan(0);
+    expect(listPrice('huggingface', 'deepseek-ai/DeepSeek-V3:fastest')).toEqual(listPrice('huggingface', 'deepseek-ai/DeepSeek-V3'));
+    expect(listPrice('openai', 'my-private-finetune')).toBeUndefined();
+    expect(listPrice(undefined, 'gpt-5-mini')).toBeUndefined();
+    expect(listPrice('nobody', 'gpt-5-mini')).toBeUndefined();
+    // One million tokens in and out cost exactly the two list prices.
+    expect(estimateCost({ input: 1_000_000, output: 1_000_000, reasoning: 0, cacheRead: 0, cacheWrite: 0 }, gpt)).toBeCloseTo(gpt.input + gpt.output, 6);
+  });
+});
+
+describe('session digest', () => {
+  const msg = (id: string, role: 'user' | 'assistant', text: string, extra: ChatMessage['parts'] = []): ChatMessage => ({ id, sessionId: 's', role, createdAt: 1, parts: [{ id: `${id}p`, type: 'text', text }, ...extra] });
+
+  it('keeps what was asked and answered, names the tools, and drops tool output and reasoning', () => {
+    const d = sessionDigest('Fix the login bug', 'Claude Code', [
+      msg('m1', 'user', 'The login form loses the password', [{ id: 'f', type: 'file', filename: 'src/login.ts', mime: 'text/plain' }]),
+      msg('m2', 'assistant', 'The handler cleared the field on blur. Fixed in login.ts.', [
+        { id: 'r', type: 'reasoning', text: 'SECRET CHAIN OF THOUGHT' },
+        { id: 't', type: 'tool', tool: 'edit', callId: 'c', status: 'completed', title: 'src/login.ts', output: 'HUGE TOOL OUTPUT' },
+        { id: 't2', type: 'tool', tool: 'bash', callId: 'c2', status: 'error', title: 'npm test', error: 'boom' },
+      ]),
+      msg('local_msg_1', 'assistant', '**Commands** /help output'),
+    ]);
+    expect(d.text).toContain('Context from an earlier chat session: "Fix the login bug" (Claude Code)');
+    expect(d.text).toContain('### User\nThe login form loses the password\n(attached: src/login.ts)');
+    expect(d.text).toContain('The handler cleared the field on blur.');
+    expect(d.text).toContain('Tools used: edit (src/login.ts); bash (npm test) [failed]');
+    expect(d.text).not.toContain('HUGE TOOL OUTPUT');
+    expect(d.text).not.toContain('SECRET CHAIN');
+    expect(d.text).not.toContain('/help output');
+    expect(d).toMatchObject({ included: 2, total: 2 });
+    expect(sessionDigest('Empty', 'opencode', [])).toMatchObject({ included: 0, total: 0 });
+  });
+
+  it('keeps the first request and the latest exchanges when a session is long', () => {
+    const long: ChatMessage[] = [];
+    for (let i = 0; i < 40; i++) long.push(msg(`u${i}`, 'user', `question ${i} ${'x'.repeat(900)}`), msg(`a${i}`, 'assistant', `answer ${i} ${'y'.repeat(1500)}`));
+    const d = sessionDigest('Long one', 'opencode', long, 12_000);
+    expect(d.text.length).toBeLessThan(14_500);
+    expect(d.text).toContain('question 0 ');
+    expect(d.text).toContain('answer 39 ');
+    expect(d.text).not.toContain('question 20 ');
+    expect(d.text).toMatch(/\(… \d+ earlier messages left out …\)/);
+    expect(d.included).toBeLessThan(d.total);
+    expect(d.total).toBe(80);
   });
 });

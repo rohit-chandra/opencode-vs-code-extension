@@ -191,8 +191,15 @@ const Message = memo(function Message({ message, live }: { message: ChatMessage;
   const empty = message.parts.length === 0 && !message.error;
   // Offered once the reply has stopped streaming, so the copy is the whole answer.
   const canCopy = !live && message.parts.some((p) => p.type === 'text' && p.text.trim() !== '');
+  // Written by the extension itself (/help, /doctor, a share link), not by a model: it can be closed.
+  const local = message.id.startsWith('local_');
   return (
-    <div class="msg assistant" data-message-id={message.id}>
+    <div class={`msg assistant ${local ? 'local' : ''}`} data-message-id={message.id}>
+      {local && (
+        <button type="button" class="icon-btn msg-close" title="Close" aria-label="Close this message" onClick={() => send({ type: 'dismissMessage', id: message.id })}>
+          <IconClose size={12} />
+        </button>
+      )}
       {message.parts.map((p) => (
         <PartView key={p.id} part={p} live={live} />
       ))}
@@ -213,8 +220,7 @@ const Message = memo(function Message({ message, live }: { message: ChatMessage;
         <div class="msg-foot">
           {canCopy && <CopyReply message={message} />}
           {u && message.completedAt && (
-            <div class="meta" title={`Input ${u.input.toLocaleString()} · cache read ${u.cacheRead.toLocaleString()} · cache write ${u.cacheWrite.toLocaleString()} · output ${u.output.toLocaleString()} · reasoning ${u.reasoning.toLocaleString()}`}>
-              {message.model && <span class="meta-model">{message.model.modelId}</span>}
+            <div class="meta" title={`${message.model ? `${message.model.modelId} · ` : ''}Input ${u.input.toLocaleString()} · cache read ${u.cacheRead.toLocaleString()} · cache write ${u.cacheWrite.toLocaleString()} · output ${u.output.toLocaleString()} · reasoning ${u.reasoning.toLocaleString()}${u.cost > 0 ? ` · ${money(u.cost)} (reported by the engine, or estimated from list prices)` : ''}`}>
               <span>{compact(tokensIn(u))} in</span>
               <span>{compact(tokensOut(u))} out</span>
               {u.cost > 0 && <span>{money(u.cost)}</span>}
@@ -280,6 +286,9 @@ export function MessageList({ messages, busy, canRetry }: { messages: ChatMessag
         <div class="retry-row">
           <button type="button" class="btn small retry" title="Send your last message again" onClick={() => send({ type: 'retry' })}>
             <IconRefresh size={12} /> Retry
+          </button>
+          <button type="button" class="btn small quiet report" title="Tell the maintainers about this (opens a pre-filled GitHub issue)" onClick={() => send({ type: 'openFeedback', kind: 'bug' })}>
+            Report a problem
           </button>
         </div>
       )}

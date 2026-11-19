@@ -1,0 +1,501 @@
+{
+  "name": "opencode-hub",
+  "displayName": "OpenCode Hub \u2014 BYOK AI Chat",
+  "description": "Open-source chat for VS Code that works with opencode first, plus Claude Code, Codex (ChatGPT), GitHub Copilot and any OpenAI-compatible or Anthropic model with your own keys. Sessions, /commands, file attachments, MCP toggles, token usage stats and a 3D companion.",
+  "version": "0.1.0",
+  "publisher": "rohit-chandra",
+  "license": "MIT",
+  "private": true,
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/rohit-chandra/opencode-vs-code-extension.git"
+  },
+  "bugs": {
+    "url": "https://github.com/rohit-chandra/opencode-vs-code-extension/issues"
+  },
+  "homepage": "https://github.com/rohit-chandra/opencode-vs-code-extension#readme",
+  "icon": "media/icon.png",
+  "galleryBanner": {
+    "color": "#0f1220",
+    "theme": "dark"
+  },
+  "keywords": [
+    "opencode",
+    "ai",
+    "chat",
+    "byok",
+    "claude code",
+    "codex",
+    "copilot",
+    "mcp",
+    "ollama",
+    "openrouter"
+  ],
+  "categories": [
+    "AI",
+    "Chat",
+    "Other"
+  ],
+  "engines": {
+    "vscode": "^1.98.0"
+  },
+  "main": "./dist/extension.js",
+  "activationEvents": [],
+  "extensionKind": [
+    "workspace"
+  ],
+  "capabilities": {
+    "untrustedWorkspaces": {
+      "supported": "limited",
+      "description": "Agents can read files and run tools, and engine settings can point at executables. In an untrusted workspace no engine is started, chat is disabled, and workspace-level engine settings are ignored.",
+      "restrictedConfigurations": [
+        "opencodeHub.opencode.path",
+        "opencodeHub.opencode.serverUrl",
+        "opencodeHub.opencode.serverPassword",
+        "opencodeHub.claudeCode.path",
+        "opencodeHub.claudeCode.permissionMode",
+        "opencodeHub.codex.path",
+        "opencodeHub.codex.sandbox",
+        "opencodeHub.providers",
+        "opencodeHub.mcp.servers",
+        "opencodeHub.systemPrompt",
+        "opencodeHub.defaultEngine"
+      ]
+    },
+    "virtualWorkspaces": false
+  },
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "opencodeHub",
+          "title": "OpenCode Hub",
+          "icon": "media/activity.svg"
+        }
+      ]
+    },
+    "views": {
+      "opencodeHub": [
+        {
+          "id": "opencodeHub.chat",
+          "name": "Chat",
+          "type": "webview",
+          "icon": "media/activity.svg",
+          "contextualTitle": "OpenCode Hub"
+        }
+      ]
+    },
+    "commands": [
+      {
+        "command": "opencodeHub.focus",
+        "title": "Open Chat",
+        "category": "OpenCode Hub",
+        "icon": "$(comment-discussion)"
+      },
+      {
+        "command": "opencodeHub.newSession",
+        "title": "New Session",
+        "category": "OpenCode Hub",
+        "icon": "$(add)"
+      },
+      {
+        "command": "opencodeHub.switchSession",
+        "title": "Switch Session\u2026",
+        "category": "OpenCode Hub",
+        "icon": "$(history)"
+      },
+      {
+        "command": "opencodeHub.selectEngine",
+        "title": "Select Engine\u2026",
+        "category": "OpenCode Hub",
+        "icon": "$(server-process)"
+      },
+      {
+        "command": "opencodeHub.selectModel",
+        "title": "Select Model\u2026",
+        "category": "OpenCode Hub"
+      },
+      {
+        "command": "opencodeHub.manageProviders",
+        "title": "Manage BYOK Providers & API Keys\u2026",
+        "category": "OpenCode Hub",
+        "icon": "$(key)"
+      },
+      {
+        "command": "opencodeHub.showMcp",
+        "title": "Show MCP Servers",
+        "category": "OpenCode Hub",
+        "icon": "$(plug)"
+      },
+      {
+        "command": "opencodeHub.showUsage",
+        "title": "Show Token Usage",
+        "category": "OpenCode Hub",
+        "icon": "$(graph)"
+      },
+      {
+        "command": "opencodeHub.resetUsage",
+        "title": "Reset Token Usage Statistics",
+        "category": "OpenCode Hub"
+      },
+      {
+        "command": "opencodeHub.attachActiveFile",
+        "title": "Attach Active File to Chat",
+        "category": "OpenCode Hub"
+      },
+      {
+        "command": "opencodeHub.attachSelection",
+        "title": "Add Selection to Chat",
+        "category": "OpenCode Hub"
+      },
+      {
+        "command": "opencodeHub.attachFiles",
+        "title": "Attach Files to Chat\u2026",
+        "category": "OpenCode Hub"
+      },
+      {
+        "command": "opencodeHub.toggleAvatar",
+        "title": "Toggle 3D Companion",
+        "category": "OpenCode Hub"
+      },
+      {
+        "command": "opencodeHub.restartEngine",
+        "title": "Restart Active Engine",
+        "category": "OpenCode Hub"
+      },
+      {
+        "command": "opencodeHub.showLogs",
+        "title": "Show Logs",
+        "category": "OpenCode Hub"
+      },
+      {
+        "command": "opencodeHub.abort",
+        "title": "Stop Response",
+        "category": "OpenCode Hub"
+      }
+    ],
+    "menus": {
+      "view/title": [
+        {
+          "command": "opencodeHub.selectEngine",
+          "when": "view == opencodeHub.chat",
+          "group": "1_engine@1"
+        },
+        {
+          "command": "opencodeHub.manageProviders",
+          "when": "view == opencodeHub.chat",
+          "group": "1_engine@2"
+        },
+        {
+          "command": "opencodeHub.restartEngine",
+          "when": "view == opencodeHub.chat",
+          "group": "1_engine@3"
+        },
+        {
+          "command": "opencodeHub.toggleAvatar",
+          "when": "view == opencodeHub.chat",
+          "group": "2_view@1"
+        },
+        {
+          "command": "opencodeHub.showLogs",
+          "when": "view == opencodeHub.chat",
+          "group": "2_view@2"
+        }
+      ],
+      "editor/context": [
+        {
+          "command": "opencodeHub.attachSelection",
+          "when": "editorHasSelection",
+          "group": "opencodeHub@1"
+        },
+        {
+          "command": "opencodeHub.attachActiveFile",
+          "group": "opencodeHub@2"
+        }
+      ],
+      "explorer/context": [
+        {
+          "command": "opencodeHub.attachFiles",
+          "group": "opencodeHub@1"
+        }
+      ]
+    },
+    "keybindings": [
+      {
+        "command": "opencodeHub.focus",
+        "key": "ctrl+alt+o",
+        "mac": "cmd+alt+o"
+      },
+      {
+        "command": "opencodeHub.attachSelection",
+        "key": "ctrl+alt+l",
+        "mac": "cmd+alt+l",
+        "when": "editorHasSelection"
+      },
+      {
+        "command": "opencodeHub.newSession",
+        "key": "ctrl+alt+n",
+        "mac": "cmd+alt+n",
+        "when": "focusedView == opencodeHub.chat"
+      }
+    ],
+    "configuration": {
+      "title": "OpenCode Hub",
+      "properties": {
+        "opencodeHub.defaultEngine": {
+          "type": "string",
+          "enum": [
+            "opencode",
+            "direct",
+            "claude-code",
+            "codex",
+            "vscode-lm"
+          ],
+          "enumDescriptions": [
+            "opencode server (recommended): every opencode provider, agents, commands and MCP.",
+            "Direct BYOK: call OpenAI-compatible or Anthropic APIs with your own keys.",
+            "Claude Code CLI (uses your Claude login).",
+            "Codex CLI (uses your ChatGPT login).",
+            "VS Code Language Models (GitHub Copilot and models from other extensions)."
+          ],
+          "default": "opencode",
+          "description": "Engine used for new chat sessions."
+        },
+        "opencodeHub.opencode.path": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "Path to the `opencode` executable. Leave empty to find it on `PATH`."
+        },
+        "opencodeHub.opencode.serverUrl": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "Attach to an already running `opencode serve` (for example `http://127.0.0.1:4096`) instead of starting one."
+        },
+        "opencodeHub.opencode.serverPassword": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "Password for the attached server (`OPENCODE_SERVER_PASSWORD`). Prefer the environment variable for shared settings."
+        },
+        "opencodeHub.claudeCode.path": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "Path to the `claude` executable. Leave empty to find it on `PATH`."
+        },
+        "opencodeHub.claudeCode.permissionMode": {
+          "type": "string",
+          "enum": [
+            "default",
+            "acceptEdits",
+            "plan",
+            "bypassPermissions"
+          ],
+          "default": "acceptEdits",
+          "markdownDescription": "Permission mode passed to Claude Code. `default` denies anything that would prompt, `acceptEdits` allows file edits, `plan` is read-only, `bypassPermissions` allows everything."
+        },
+        "opencodeHub.claudeCode.models": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [],
+          "markdownDescription": "Extra model names or aliases to offer for Claude Code, in addition to `default`, `opus`, `sonnet` and `haiku`."
+        },
+        "opencodeHub.codex.path": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "Path to the `codex` executable. Leave empty to find it on `PATH`."
+        },
+        "opencodeHub.codex.sandbox": {
+          "type": "string",
+          "enum": [
+            "read-only",
+            "workspace-write",
+            "danger-full-access"
+          ],
+          "default": "workspace-write",
+          "description": "Sandbox policy passed to Codex."
+        },
+        "opencodeHub.codex.models": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [],
+          "markdownDescription": "Model names to offer for Codex, in addition to the default from `~/.codex/config.toml`."
+        },
+        "opencodeHub.providers": {
+          "type": "array",
+          "default": [],
+          "markdownDescription": "Direct BYOK providers. API keys are **not** stored here \u2014 use *OpenCode Hub: Manage BYOK Providers & API Keys\u2026*.",
+          "items": {
+            "type": "object",
+            "required": [
+              "id",
+              "type"
+            ],
+            "properties": {
+              "id": {
+                "type": "string",
+                "description": "Unique id, e.g. \"openrouter\"."
+              },
+              "name": {
+                "type": "string"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "openai-compatible",
+                  "anthropic"
+                ],
+                "description": "Wire format."
+              },
+              "baseUrl": {
+                "type": "string",
+                "description": "API base URL, e.g. https://api.openai.com/v1 or http://localhost:11434/v1."
+              },
+              "models": {
+                "type": "array",
+                "description": "Model ids to offer. Leave empty to discover them from the provider's /models endpoint.",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "headers": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "string"
+                }
+              },
+              "pricing": {
+                "type": "object",
+                "description": "Optional USD price per million tokens keyed by model id, used for cost estimates.",
+                "additionalProperties": {
+                  "type": "object",
+                  "properties": {
+                    "input": {
+                      "type": "number"
+                    },
+                    "output": {
+                      "type": "number"
+                    },
+                    "cacheRead": {
+                      "type": "number"
+                    },
+                    "cacheWrite": {
+                      "type": "number"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "opencodeHub.mcp.servers": {
+          "type": "object",
+          "default": {},
+          "markdownDescription": "MCP servers for the **Direct BYOK** and **Copilot** engines. (opencode, Claude Code and Codex use their own MCP configuration, which this extension reads and toggles.)",
+          "additionalProperties": {
+            "type": "object",
+            "properties": {
+              "command": {
+                "type": "string"
+              },
+              "args": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "env": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "string"
+                }
+              },
+              "url": {
+                "type": "string"
+              },
+              "headers": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "string"
+                }
+              },
+              "enabled": {
+                "type": "boolean",
+                "default": true
+              }
+            }
+          }
+        },
+        "opencodeHub.avatar.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show the 3D companion in the chat view."
+        },
+        "opencodeHub.avatar.style": {
+          "type": "string",
+          "enum": [
+            "bot",
+            "orb"
+          ],
+          "enumDescriptions": [
+            "Oki, a small robot that looks around and reacts.",
+            "A minimal glowing orb."
+          ],
+          "default": "bot",
+          "description": "Companion style."
+        },
+        "opencodeHub.usage.statusBar": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show the current session's token usage in the status bar."
+        },
+        "opencodeHub.systemPrompt": {
+          "type": "string",
+          "default": "",
+          "editPresentation": "multilineText",
+          "description": "Extra system prompt for the Direct BYOK and Copilot engines."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "build:prod": "node scripts/build.mjs --production",
+    "watch": "node scripts/build.mjs --watch",
+    "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p webview/tsconfig.json --noEmit",
+    "lint": "eslint .",
+    "test": "npm run test:unit",
+    "test:unit": "vitest run",
+    "test:e2e": "vitest run --config vitest.e2e.config.mts",
+    "test:ui": "node test/ui/run.mjs",
+    "test:integration": "node test/integration/run.mjs",
+    "package": "npm run build:prod && vsce package --no-dependencies -o opencode-hub.vsix",
+    "vscode:prepublish": "npm run build:prod",
+    "icon": "node scripts/render-icon.mjs"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@modelcontextprotocol/sdk": "^1.32.2",
+    "@types/dompurify": "^3.0.5",
+    "@types/mocha": "^10.0.10",
+    "@types/node": "^22.20.5",
+    "@types/three": "^0.187.0",
+    "@types/vscode": "1.98",
+    "@vscode/test-electron": "^3.1.0",
+    "@vscode/vsce": "^4.1.1",
+    "dompurify": "^3.4.18",
+    "esbuild": "^0.28.2",
+    "eslint": "^10.15.0",
+    "highlight.js": "^11.12.0",
+    "marked": "^18.2.1",
+    "mocha": "^11.8.0",
+    "preact": "^11.2.0",
+    "puppeteer-core": "^25.18.1",
+    "three": "^0.187.0",
+    "typescript": "^6.0.3",
+    "typescript-eslint": "^8.73.0",
+    "vitest": "^5.1.1"
+  }
+}

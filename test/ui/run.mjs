@@ -1,0 +1,532 @@
+#!/usr/bin/env node
+// Webview UI tests: load the real webview bundle in headless Chrome with a mocked VS Code
+// API, drive it like a user would, assert on what it renders and posts, and save screenshots.
+import assert from 'node:assert/strict';
+import { existsSync, mkdirSync, readFileSync } from 'node:fs';
+import http from 'node:http';
+import path from 'node:path';
+import puppeteer from 'puppeteer-core';
+import { base, conversation, usageSummary } from './fixtures.mjs';
+
+const root = path.resolve(import.meta.dirname, '../..');
+const outDir = path.join(root, 'test-results', 'ui');
+mkdirSync(outDir, { recursive: true });
+
+const chrome = [process.env.CHROME_BIN, '/usr/bin/google-chrome', '/usr/bin/google-chrome-stable', '/usr/bin/chromium', '/usr/bin/chromium-browser', '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome', 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe'].find((p) => p && existsSync(p));
+if (!chrome) {
+  console.error('Chrome not found. Set CHROME_BIN to run the UI tests.');
+  process.exit(1);
+}
+
+const types = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.map': 'application/json' };
+const server = http.createServer((req, res) => {
+  const url = new URL(req.url, 'http://x');
+  const file = url.pathname === '/' ? path.join(root, 'test/ui/harness.html') : path.join(root, url.pathname);
+  if (!file.startsWith(root) || !existsSync(file)) {
+    res.writeHead(404);
+    return res.end();
+  }
+  res.writeHead(200, { 'content-type': types[path.extname(file)] ?? 'application/octet-stream' });
+  res.end(readFileSync(file));
+});
+await new Promise((r) => server.listen(0, '127.0.0.1', r));
+const origin = `http://127.0.0.1:${server.address().port}`;
+
+const browser = await puppeteer.launch({
+  executablePath: chrome,
+  headless: true,
+  args: ['--no-sandbox', '--disable-dev-shm-usage', '--use-gl=angle', '--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--ignore-gpu-blocklist', '--force-device-scale-factor=2'],
+});
+
+const results = [];
+let failed = 0;
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+async function open(theme = 'dark', width = 400, height = 760) {
+  const page = await browser.newPage();
+  await page.setViewport({ width, height, deviceScaleFactor: 2 });
+  const consoleErrors = [];
+  page.on('console', (m) => m.type() === 'error' && consoleErrors.push(m.text()));
+  page.on('pageerror', (e) => consoleErrors.push(String(e)));
+  await page.goto(`${origin}/?theme=${theme}`);
+  await page.waitForFunction(() => window.__posted.some((m) => m.type === 'ready'));
+  const host = (m) => page.evaluate((msg) => window.__host(msg), m);
+  const posted = (type) => page.evaluate((t) => window.__posted.filter((m) => !t || m.type === t), type);
+  const clearPosted = () => page.evaluate(() => (window.__posted.length = 0));
+  const shot = (name) => page.screenshot({ path: path.join(outDir, `${name}.png`) });
+  const text = (sel) => page.$eval(sel, (el) => el.textContent);
+  return { page, host, posted, clearPosted, shot, text, consoleErrors };
+}
+
+async function test(name, fn) {
+  const started = Date.now();
+  try {
+    await fn();
+    results.push(`  ok    ${name} (${Date.now() - started} ms)`);
+  } catch (err) {
+    failed++;
+    results.push(`  FAIL  ${name}\n        ${String(err?.stack ?? err).split('\n').slice(0, 6).join('\n        ')}`);
+  }
+}
+
+await test('empty state: welcome copy, suggestions and a live 3D companion', async () => {
+  const t = await open();
+  await t.host({ type: 'state', state: base });
+  await t.page.waitForSelector('.welcome-line');
+  assert.match(await t.text('.stage-caption'), /What are we building\?/);
+  assert.match(await t.text('.welcome-line'), /Chatting through opencode with claude-sonnet-5-5/);
+  assert.equal(await t.text('.session-title'), 'New session');
+  // The companion bundle loads lazily and must render real WebGL frames.
+  await t.page.waitForFunction(() => document.querySelector('canvas.oki')?.dataset.renderer === 'webgl', { timeout: 15000 });
+  const f1 = await t.page.$eval('canvas.oki', (c) => Number(c.dataset.frames || 0));
+  await sleep(700);
+  const f2 = await t.page.$eval('canvas.oki', (c) => Number(c.dataset.frames || 0));
+  assert.ok(f2 > f1 + 5, `avatar is animating (${f1} -> ${f2} frames)`);
+  // The canvas is not blank. A WebGL canvas cannot be read back after compositing, so look at what is on screen.
+  const box = await (await t.page.$('canvas.oki')).boundingBox();
+  const png = await t.page.screenshot({ clip: box, encoding: 'base64' });
+  const painted = await t.page.evaluate(async (b64) => {
+    const img = new Image();
+    img.src = `data:image/png;base64,${b64}`;
+    await img.decode();
+    const probe = document.createElement('canvas');
+    probe.width = 64;
+    probe.height = 64;
+    const g = probe.getContext('2d');
+    g.drawImage(img, 0, 0, 64, 64);
+    const d = g.getImageData(0, 0, 64, 64).data;
+    const bg = [d[0], d[1], d[2]];
+    let n = 0;
+    for (let i = 0; i < d.length; i += 4) if (Math.abs(d[i] - bg[0]) + Math.abs(d[i + 1] - bg[1]) + Math.abs(d[i + 2] - bg[2]) > 40) n++;
+    return n / (64 * 64);
+  }, png);
+  assert.ok(painted > 0.15, `avatar draws something (${(painted * 100).toFixed(0)}% of pixels)`);
+  assert.equal(await t.page.$eval('canvas.oki', (c) => c.dataset.mood), 'idle');
+  await t.shot('01-empty-dark');
+  await t.page.click('.suggestion');
+  assert.deepEqual((await t.posted('send'))[0], { type: 'send', text: 'Give me a short tour of this workspace: what it does and where the important code lives.' });
+  assert.deepEqual(t.consoleErrors, []);
+  await t.page.close();
+});
+
+await test('conversation: markdown, code, tool cards, reasoning, files and per-message usage', async () => {
+  const t = await open();
+  await t.host({ type: 'state', state: conversation });
+  await t.page.waitForSelector('.msg.assistant .md');
+  assert.equal(await t.text('.session-title'), 'Refactor the auth middleware');
+  assert.equal(await t.text('.msg.user .bubble'), 'Why is every request so slow after the auth change?');
+  assert.equal(await t.text('.stage-caption'), 'Ready');
+  assert.match(await t.text('.stage-sub'), /opencode, claude-sonnet-5-5/);
+  assert.equal(await t.page.$$eval('.fold.tool', (els) => els.length), 2);
+  assert.equal(await t.page.$eval('.fold.tool.error .tool-name', (el) => el.textContent), 'bash');
+  assert.ok(await t.page.$('.code .hljs-keyword'), 'code is syntax highlighted');
+  assert.equal(await t.text('.code-lang'), 'ts');
+  assert.match(await t.text('.msg.assistant .meta'), /claude-sonnet-5-5.*23k in.*852 out.*\$0\.04/s);
+  assert.equal(await t.text('.usage-btn .usage-count'), '24k');
+  assert.match(await t.page.$eval('.usage-btn', (el) => el.title), /23,440 tokens in, 852 out, \$0\.04/);
+  assert.ok(await t.page.$('.md table'), 'tables render');
+
+  // Tool card expands to show input and output.
+  await t.page.click('.fold.tool .fold-head');
+  assert.match(await t.text('.fold.tool.open .tool-io'), /verify/);
+  // Copy and insert buttons on code blocks go through the host.
+  await t.clearPosted();
+  await t.page.click('.code [data-action="copy"]');
+  await t.page.click('.code [data-action="insert"]');
+  const copy = (await t.posted('copy'))[0];
+  assert.match(copy.text, /^export function auth/);
+  assert.equal((await t.posted('insertCode')).length, 1);
+  // Links never navigate: files open in the editor, http links go to the browser.
+  await t.page.click('.md [data-href="src/middleware/auth.ts"]');
+  await t.page.click('.md [data-href^="https://expressjs.com"]');
+  assert.deepEqual(await t.posted('openFile'), [{ type: 'openFile', path: 'src/middleware/auth.ts' }]);
+  assert.deepEqual(await t.posted('openExternal'), [{ type: 'openExternal', url: 'https://expressjs.com/en/guide/using-middleware.html' }]);
+  await t.page.click('.msg.user .chip.file');
+  assert.equal((await t.posted('openFile'))[1].path, '/work/app/src/middleware/auth.ts');
+  await sleep(600);
+  await t.shot('02-conversation-dark');
+  assert.deepEqual(t.consoleErrors, []);
+  await t.page.close();
+});
+
+await test('streaming: deltas append text and the companion follows along', async () => {
+  const t = await open();
+  await t.host({ type: 'state', state: { ...conversation, activity: 'busy' } });
+  await t.page.waitForSelector('.msg.assistant');
+  const sid = 'ses_1';
+  await t.host({ type: 'event', event: { type: 'message.updated', message: { id: 'm3', sessionId: sid, role: 'user', createdAt: Date.now(), parts: [{ id: 'u', type: 'text', text: 'And the tests?' }] } } });
+  await t.host({ type: 'event', event: { type: 'message.updated', message: { id: 'm4', sessionId: sid, role: 'assistant', createdAt: Date.now() + 1, parts: [] } } });
+  await t.page.waitForSelector('[data-message-id="m4"] .typing');
+  await t.page.waitForFunction(() => document.querySelector('.stage-caption')?.textContent === 'Thinking…');
+  await t.page.waitForFunction(() => document.querySelector('canvas.oki')?.dataset.mood === 'thinking');
+  await t.host({ type: 'event', event: { type: 'part.updated', sessionId: sid, messageId: 'm4', part: { id: 'pt', type: 'text', text: 'Run ' } } });
+  for (const delta of ['`npm', ' test`', ' to', ' check', ' them.']) {
+    await t.host({ type: 'event', event: { type: 'part.delta', sessionId: sid, messageId: 'm4', partId: 'pt', delta } });
+    await sleep(40);
+  }
+  await t.page.waitForFunction(() => document.querySelector('[data-message-id="m4"] .md')?.textContent.trim() === 'Run npm test to check them.');
+  await t.page.waitForFunction(() => document.querySelector('.stage-caption')?.textContent === 'Writing…');
+  assert.equal(await t.page.$eval('canvas.oki', (c) => c.dataset.mood), 'speaking');
+  await t.shot('03-streaming-dark');
+  // A running tool switches the companion to its working mood.
+  await t.host({ type: 'event', event: { type: 'part.updated', sessionId: sid, messageId: 'm4', part: { id: 'tool1', type: 'tool', tool: 'bash', callId: 'c9', status: 'running', title: 'npm test' } } });
+  await t.page.waitForFunction(() => document.querySelector('.stage-caption')?.textContent === 'Running bash…');
+  assert.equal(await t.page.$eval('canvas.oki', (c) => c.dataset.mood), 'tool');
+  // Stop button and Esc both abort.
+  await t.clearPosted();
+  await t.page.click('.send.stop');
+  assert.equal((await t.posted('abort')).length, 1);
+  // Finishing the turn: happy for a moment, then back to idle.
+  await t.host({ type: 'patch', patch: { activity: 'idle' } });
+  await t.page.waitForFunction(() => document.querySelector('.stage-caption')?.textContent === 'Done');
+  await t.page.waitForFunction(() => document.querySelector('.stage-caption')?.textContent === 'Ready', { timeout: 5000 });
+  assert.deepEqual(t.consoleErrors, []);
+  await t.page.close();
+});
+
+await test('slash commands: popup, filtering, keyboard selection and argument hints', async () => {
+  const t = await open();
+  await t.host({ type: 'state', state: conversation });
+  await t.page.waitForSelector('textarea');
+  await t.page.focus('textarea');
+  await t.page.keyboard.type('/');
+  await t.page.waitForSelector('.popup .popup-item');
+  const all = await t.page.$$eval('.popup .popup-name', (els) => els.map((e) => e.textContent.trim().split(' ')[0]));
+  assert.deepEqual(all.slice(0, 3), ['/new', '/sessions', '/model']);
+  assert.ok(all.includes('/review'), 'engine commands are listed');
+  await t.shot('04-slash-popup-dark');
+  await t.page.keyboard.type('mc');
+  await t.page.waitForFunction(() => document.querySelectorAll('.popup .popup-item').length === 1);
+  assert.match(await t.text('.popup-item.active'), /\/mcp/);
+  await t.clearPosted();
+  await t.page.keyboard.press('Enter');
+  assert.deepEqual(await t.posted('send'), [{ type: 'send', text: '/mcp' }]);
+  assert.equal(await t.page.$eval('textarea', (el) => el.value), '');
+  // A command that takes an argument is completed, not sent.
+  await t.page.keyboard.type('/mod');
+  await t.page.keyboard.press('Tab');
+  assert.equal(await t.page.$eval('textarea', (el) => el.value), '/model ');
+  assert.equal((await t.posted('send')).length, 1);
+  await t.page.keyboard.type('haiku');
+  await t.page.keyboard.press('Enter');
+  assert.deepEqual((await t.posted('send'))[1], { type: 'send', text: '/model haiku' });
+  // Arrow keys move the selection; Escape closes the popup.
+  await t.page.keyboard.type('/');
+  await t.page.keyboard.press('ArrowDown');
+  assert.match(await t.text('.popup-item.active'), /\/sessions/);
+  await t.page.keyboard.press('Escape');
+  assert.equal(await t.page.$('.popup'), null);
+  // Shift+Enter makes a new line instead of sending.
+  await t.page.$eval('textarea', (el) => (el.value = ''));
+  await t.page.keyboard.type('line one');
+  await t.page.keyboard.down('Shift');
+  await t.page.keyboard.press('Enter');
+  await t.page.keyboard.up('Shift');
+  await t.page.keyboard.type('line two');
+  await t.clearPosted();
+  await t.page.keyboard.press('Enter');
+  assert.equal((await t.posted('send'))[0].text, '/line one\nline two'.replace('/', ''));
+  assert.deepEqual(t.consoleErrors, []);
+  await t.page.close();
+});
+
+await test('attachments: @ mentions, chips, removal and pasted images', async () => {
+  const t = await open();
+  await t.host({ type: 'state', state: conversation });
+  await t.page.waitForSelector('textarea');
+  await t.page.focus('textarea');
+  await t.page.keyboard.type('look at @led');
+  await t.page.waitForFunction(() => window.__posted.some((m) => m.type === 'searchFiles' && m.query === 'led'));
+  const req = (await t.posted('searchFiles')).pop();
+  await t.host({ type: 'fileResults', requestId: req.requestId, files: [{ path: '/work/app/src/core/usageLedger.ts', relative: 'src/core/usageLedger.ts' }, { path: '/work/app/test/usageLedger.test.ts', relative: 'test/usageLedger.test.ts' }] });
+  await t.page.waitForSelector('.popup .popup-item');
+  assert.equal(await t.page.$$eval('.popup .popup-item', (els) => els.length), 2);
+  await t.page.keyboard.press('Enter');
+  assert.equal(await t.page.$eval('textarea', (el) => el.value), 'look at @src/core/usageLedger.ts ');
+  assert.deepEqual(await t.posted('addPaths'), [{ type: 'addPaths', paths: ['/work/app/src/core/usageLedger.ts'] }]);
+
+  // The host answers with the attachment list; chips appear and can be removed.
+  const png = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==';
+  await t.host({ type: 'patch', patch: { attachments: [{ id: 'a1', kind: 'file', name: 'src/core/usageLedger.ts', mime: 'text/plain', path: '/work/app/src/core/usageLedger.ts' }, { id: 'a2', kind: 'selection', name: 'src/app.ts:10-24', mime: 'text/plain', text: 'x' }, { id: 'a3', kind: 'image', name: 'screenshot.png', mime: 'image/png', dataUrl: png }] } });
+  await t.page.waitForFunction(() => document.querySelectorAll('.attachments .chip').length === 3);
+  assert.ok(await t.page.$('.attachments .thumb'), 'image attachments show a thumbnail');
+  await t.shot('05-attachments-dark');
+  await t.page.click('.attachments .chip:nth-child(2) .chip-x');
+  assert.deepEqual(await t.posted('removeAttachment'), [{ type: 'removeAttachment', id: 'a2' }]);
+  await t.page.click('button[aria-label="Attach files"]');
+  assert.equal((await t.posted('pickFiles')).length, 1);
+
+  // Pasting an image from the clipboard turns into an attachment with its bytes.
+  await t.clearPosted();
+  await t.page.evaluate(async (dataUrl) => {
+    const blob = await (await fetch(dataUrl)).blob();
+    const dt = new DataTransfer();
+    dt.items.add(new File([blob], 'clip.png', { type: 'image/png' }));
+    document.querySelector('textarea').dispatchEvent(new ClipboardEvent('paste', { clipboardData: dt, bubbles: true, cancelable: true }));
+  }, png);
+  await t.page.waitForFunction(() => window.__posted.some((m) => m.type === 'addAttachment'));
+  const pasted = (await t.posted('addAttachment'))[0].attachment;
+  assert.equal(pasted.kind, 'image');
+  assert.equal(pasted.name, 'clip.png');
+  assert.ok(pasted.dataUrl.startsWith('data:image/png;base64,'));
+
+  // Dropping files from the VS Code explorer sends their URIs to the host.
+  await t.page.evaluate(() => {
+    const dt = new DataTransfer();
+    dt.setData('text/uri-list', 'file:///work/app/README.md\r\nfile:///work/app/package.json');
+    document.querySelector('.app').dispatchEvent(new DragEvent('drop', { dataTransfer: dt, bubbles: true, cancelable: true }));
+  });
+  assert.deepEqual(await t.posted('addPaths'), [{ type: 'addPaths', paths: ['file:///work/app/README.md', 'file:///work/app/package.json'] }]);
+  assert.deepEqual(t.consoleErrors, []);
+  await t.page.close();
+});
+
+await test('permission and question prompts', async () => {
+  const t = await open();
+  await t.host({ type: 'state', state: { ...conversation, activity: 'busy', permissions: [{ id: 'per_1', sessionId: 'ses_1', kind: 'bash', title: 'Allow bash?', detail: 'rm -rf dist && npm run build' }], questions: [{ id: 'que_1', sessionId: 'ses_1', questions: [{ question: 'Which test runner should I set up?', options: [{ label: 'Vitest' }, { label: 'Jest' }] }] }] } });
+  await t.page.waitForSelector('.request');
+  assert.equal(await t.text('.request-title'), 'Allow bash?');
+  assert.equal(await t.text('.request-detail'), 'rm -rf dist && npm run build');
+  assert.equal(await t.text('.stage-caption'), 'Needs your OK');
+  await t.page.waitForFunction(() => document.querySelector('canvas.oki')?.dataset.mood === 'waiting');
+  await sleep(500);
+  await t.shot('06-permission-dark');
+  await t.page.click('.request .btn.primary');
+  assert.deepEqual(await t.posted('permissionReply'), [{ type: 'permissionReply', requestId: 'per_1', reply: 'once' }]);
+  const buttons = await t.page.$$eval('.request:first-child .btn', (els) => els.map((e) => e.textContent.trim()));
+  assert.deepEqual(buttons, ['Allow once', 'Always allow', 'Deny']);
+  // The question needs an option before it can be sent.
+  assert.equal(await t.page.$eval('.request:last-child .btn.primary', (el) => el.disabled), true);
+  await t.page.click('.option');
+  await t.page.click('.request:last-child .btn.primary');
+  assert.deepEqual(await t.posted('questionReply'), [{ type: 'questionReply', requestId: 'que_1', answers: [['Vitest']] }]);
+  assert.deepEqual(t.consoleErrors, []);
+  await t.page.close();
+});
+
+await test('MCP panel: status of every server and a working toggle switch', async () => {
+  const t = await open();
+  await t.host({ type: 'state', state: conversation });
+  await t.page.waitForSelector('.mcp-btn');
+  assert.equal(await t.text('.mcp-btn .badge'), '1');
+  assert.ok(await t.page.$('.mcp-btn .alert-dot'), 'a dot flags servers that need attention');
+  await t.page.click('.mcp-btn');
+  await t.page.waitForSelector('.sheet .row.mcp');
+  assert.match(await t.text('.sheet-lede'), /1 of 4 connected for opencode/);
+  const rows = await t.page.$$eval('.row.mcp', (els) => els.map((e) => ({ name: e.querySelector('.row-title').textContent, sub: e.querySelector('.row-sub').textContent, on: e.querySelector('.switch').getAttribute('aria-checked') })));
+  assert.deepEqual(rows.map((r) => [r.name, r.on]), [['github', 'true'], ['postgres', 'false'], ['sentry', 'true'], ['linear', 'true']]);
+  assert.match(rows[0].sub, /Connected, 26 tools/);
+  assert.match(rows[2].sub, /ENOENT/);
+  assert.match(rows[3].sub, /Needs sign-in/);
+  await t.shot('07-mcp-panel-dark');
+  await t.clearPosted();
+  await t.page.click('.row.mcp:nth-child(2) .switch');
+  await t.page.click('.row.mcp:nth-child(1) .switch');
+  assert.deepEqual(await t.posted('mcpToggle'), [{ type: 'mcpToggle', name: 'postgres', enabled: true }, { type: 'mcpToggle', name: 'github', enabled: false }]);
+  // The host confirms; the switch and the badge follow.
+  await t.host({ type: 'patch', patch: { mcp: conversation.mcp.map((m) => (m.name === 'postgres' ? { ...m, status: 'connected', enabled: true } : m)) } });
+  await t.page.waitForFunction(() => document.querySelector('.row.mcp:nth-child(2) .switch').getAttribute('aria-checked') === 'true');
+  assert.equal(await t.text('.mcp-btn .badge'), '2');
+  // Switches work from the keyboard and Escape closes the sheet.
+  await t.page.focus('.row.mcp:nth-child(3) .switch');
+  await t.page.keyboard.press('Space');
+  assert.deepEqual((await t.posted('mcpToggle')).pop(), { type: 'mcpToggle', name: 'sentry', enabled: false });
+  await t.page.keyboard.press('Escape');
+  assert.equal(await t.page.$('.sheet'), null);
+  // The host can open the panel too (the /mcp command and the title-bar button do this).
+  await t.host({ type: 'patch', patch: { panel: { name: 'mcp', nonce: 5 } } });
+  await t.page.waitForSelector('.sheet .row.mcp');
+  assert.deepEqual(t.consoleErrors, []);
+  await t.page.close();
+});
+
+await test('usage panel: this session, totals, per provider and model, per day', async () => {
+  const t = await open('dark', 400, 980);
+  await t.host({ type: 'state', state: { ...conversation, usage: usageSummary } });
+  await t.page.waitForSelector('.usage-btn');
+  await t.page.click('.usage-btn');
+  await t.page.waitForSelector('.sheet .stats');
+  assert.equal((await t.posted('usageRefresh')).length, 1);
+  const stats = await t.page.$$eval('.usage-section:first-of-type .stat', (els) => els.map((e) => `${e.querySelector('.stat-label').textContent}=${e.querySelector('.stat-value').textContent}`));
+  assert.deepEqual(stats, ['input=8.2k', 'output=612', 'cached=15k', 'reasoning=240', 'cost=$0.04', 'reply=1']);
+  const totals = await t.page.$$eval('.usage-section:nth-of-type(2) .stat-value', (els) => els.map((e) => e.textContent));
+  assert.deepEqual(totals, ['1.3M', '96k', '3.6M', '41k', '$18.4', '412']);
+  const groups = await t.page.$$eval('.usage-group', (els) => els.map((e) => `${e.querySelector('.usage-provider').textContent}|${e.querySelector('.tag').textContent}|${e.querySelectorAll('tbody tr').length}`));
+  assert.deepEqual(groups, ['Anthropic|opencode|2', 'openrouter|Direct BYOK|1', 'claude-code|Claude Code|1', 'ollama|Direct BYOK|1']);
+  // Bars are proportional: the biggest row is full width, a row a tenth its size is clearly shorter.
+  const widths = await t.page.$$eval('.usage-group .bar', (els) => els.map((e) => parseFloat(e.style.width)));
+  assert.equal(widths[0], 100);
+  assert.ok(widths[1] < 20 && widths[1] > 5, `second bar is proportional (${widths[1]}%)`);
+  assert.equal(await t.page.$$eval('.days .day', (els) => els.length), 14);
+  assert.match(await t.page.$eval('.days .day:nth-child(11)', (el) => el.title), /261,000 tokens/);
+  assert.equal(await t.page.$$eval('.usage-table.sessions tbody tr', (els) => els.length), 3);
+  await t.shot('08-usage-panel-dark');
+  await t.clearPosted();
+  await t.page.click('.sheet-head .btn.quiet');
+  assert.equal((await t.posted('usageReset')).length, 1);
+  assert.deepEqual(t.consoleErrors, []);
+  await t.page.close();
+});
+
+await test('sessions panel: search, switch, rename, delete, new', async () => {
+  const t = await open();
+  await t.host({ type: 'state', state: { ...conversation, usage: usageSummary } });
+  await t.page.waitForSelector('.session-btn');
+  await t.page.click('.session-btn');
+  await t.page.waitForSelector('.sheet .row.session');
+  assert.equal(await t.page.$$eval('.row.session', (els) => els.length), 3);
+  assert.equal(await t.text('.row.session.active .row-title'), 'Refactor the auth middleware');
+  assert.match(await t.text('.row.session.active .row-sub'), /min ago, 24k tokens/);
+  await t.shot('09-sessions-panel-dark');
+  await t.page.type('.sheet .search input', 'flaky');
+  await t.page.waitForFunction(() => document.querySelectorAll('.row.session').length === 1);
+  await t.clearPosted();
+  await t.page.click('.row.session .row-main');
+  assert.deepEqual(await t.posted('switchSession'), [{ type: 'switchSession', sessionId: 'ses_2' }]);
+  assert.equal(await t.page.$('.sheet'), null);
+
+  await t.page.click('button[aria-label="Sessions"]');
+  await t.page.waitForSelector('.row.session');
+  await t.page.hover('.row.session:nth-child(3)');
+  await t.page.click('.row.session:nth-child(3) button[title="Rename"]');
+  await t.page.waitForSelector('input.rename');
+  await t.page.$eval('input.rename', (el) => el.select());
+  await t.page.keyboard.type('Ledger tests');
+  await t.page.keyboard.press('Enter');
+  assert.deepEqual(await t.posted('renameSession'), [{ type: 'renameSession', sessionId: 'ses_3', title: 'Ledger tests' }]);
+  await t.page.hover('.row.session:nth-child(2)');
+  await t.page.click('.row.session:nth-child(2) button[title="Delete"]');
+  assert.deepEqual(await t.posted('deleteSession'), [{ type: 'deleteSession', sessionId: 'ses_2' }]);
+  await t.page.click('.sheet-head .btn.small');
+  assert.equal((await t.posted('newSession')).length, 1);
+  assert.deepEqual(t.consoleErrors, []);
+  await t.page.close();
+});
+
+await test('engine, model and agent pickers', async () => {
+  const t = await open();
+  await t.host({ type: 'state', state: conversation });
+  await t.page.waitForSelector('.controls .pill');
+  await t.page.click('.controls .pill');
+  await t.page.waitForSelector('.menu .menu-item');
+  const engines = await t.page.$$eval('.menu .menu-item', (els) => els.map((e) => e.textContent.trim()));
+  assert.deepEqual(engines.slice(0, 5), ['opencodev1.19.6', 'Direct BYOKready', 'Claude Codev2.1.328', 'Codex (ChatGPT)not available', 'Copilot / VS Code models']);
+  await t.shot('10-engine-menu-dark');
+  await t.clearPosted();
+  await t.page.click('.menu .menu-item:nth-child(2)');
+  assert.deepEqual(await t.posted('setEngine'), [{ type: 'setEngine', engine: 'direct' }]);
+  assert.equal(await t.page.$('.menu'), null);
+
+  await t.page.click('.pill.model');
+  await t.page.waitForSelector('.sheet .group');
+  assert.deepEqual(await t.page.$$eval('.sheet .group h3', (els) => els.map((e) => e.textContent)), ['Anthropic', 'OpenRouter', 'Ollama (local)']);
+  await t.shot('11-models-panel-dark');
+  await t.page.type('.sheet .search input', 'qwen');
+  await t.page.waitForFunction(() => document.querySelectorAll('.sheet .row').length === 1);
+  await t.page.click('.sheet .row .row-main');
+  assert.deepEqual(await t.posted('setModel'), [{ type: 'setModel', model: { providerId: 'openrouter', modelId: 'qwen/qwen3-coder' } }]);
+
+  await t.page.click('.controls .menu-anchor:nth-of-type(2) .pill, .controls .menu-anchor:last-of-type .pill');
+  await t.page.waitForSelector('.menu .menu-item');
+  await t.page.click('.menu .menu-item:nth-child(2)');
+  assert.deepEqual(await t.posted('setAgent'), [{ type: 'setAgent', agent: 'plan' }]);
+  assert.deepEqual(t.consoleErrors, []);
+  await t.page.close();
+});
+
+await test('companion: orb style, hide and show, and the plain status line without it', async () => {
+  const t = await open();
+  await t.host({ type: 'state', state: { ...base, avatar: { enabled: true, style: 'orb' } } });
+  await t.page.waitForFunction(() => document.querySelector('canvas.oki')?.dataset.style === 'orb', { timeout: 15000 });
+  await sleep(600);
+  await t.shot('12-orb-dark');
+  await t.clearPosted();
+  await t.page.click('.stage-oki');
+  assert.deepEqual(await t.posted('setAvatar'), [{ type: 'setAvatar', style: 'bot' }]);
+  await t.page.click('button[aria-label="Hide companion"]');
+  assert.deepEqual((await t.posted('setAvatar'))[1], { type: 'setAvatar', enabled: false });
+  await t.host({ type: 'patch', patch: { avatar: { enabled: false, style: 'bot' } } });
+  await t.page.waitForFunction(() => !document.querySelector('canvas.oki'));
+  assert.equal(await t.text('.welcome h1'), 'What are we building?');
+  await t.host({ type: 'patch', patch: { ...conversation, avatar: { enabled: false, style: 'bot' }, activity: 'busy' } });
+  await t.page.waitForSelector('.status-line');
+  assert.match(await t.text('.status-line'), /Thinking…/);
+  await t.shot('13-no-avatar-dark');
+  assert.deepEqual(t.consoleErrors, []);
+  await t.page.close();
+});
+
+await test('engine not available, untrusted workspace and toasts', async () => {
+  const t = await open();
+  const down = { ...base, engine: 'codex', model: undefined, providers: [], mcp: [], agents: [] };
+  await t.host({ type: 'state', state: down });
+  await t.page.waitForSelector('.callout');
+  assert.match(await t.text('.callout'), /Codex \(ChatGPT\) is not available.*Codex CLI not found\./s);
+  await t.page.waitForFunction(() => document.querySelector('.stage-caption')?.textContent === 'Engine not available');
+  await sleep(500);
+  await t.shot('14-engine-unavailable-dark');
+  await t.page.click('.callout .btn.primary');
+  assert.equal((await t.posted('restartEngine')).length, 1);
+  await t.host({ type: 'state', state: { ...base, trusted: false } });
+  await t.page.waitForFunction(() => /Workspace not trusted/.test(document.querySelector('.callout')?.textContent ?? ''));
+  assert.match(await t.page.$eval('textarea', (el) => el.placeholder), /Trust this workspace/);
+  await t.host({ type: 'patch', patch: { trusted: true, notice: { level: 'error', text: 'Chat request failed (401): invalid x-api-key. Check the API key for this provider.', nonce: 1 } } });
+  await t.page.waitForSelector('.toast.error');
+  assert.match(await t.text('.toast'), /invalid x-api-key/);
+  await t.page.click('.toast .icon-btn');
+  assert.equal(await t.page.$('.toast'), null);
+  assert.deepEqual(t.consoleErrors, []);
+  await t.page.close();
+});
+
+await test('model output is sanitized: no script execution, no remote requests', async () => {
+  const t = await open();
+  const requests = [];
+  t.page.on('request', (r) => !r.url().startsWith(origin) && !r.url().startsWith('data:') && requests.push(r.url()));
+  const evil = 'Hello <img src="x" onerror="window.__xss=1"> <script>window.__xss=2</script> <iframe src="https://evil.example"></iframe>\n\n![t](https://tracker.example/pixel.png)\n\n[click](javascript:window.__xss=3) <a href="https://ok.example" onclick="window.__xss=4">ok</a>\n\n<style>body{display:none}</style><form action="https://evil.example"><input name="a"></form>';
+  await t.host({ type: 'state', state: { ...conversation, messages: [{ id: 'x1', sessionId: 'ses_1', role: 'assistant', createdAt: 1, completedAt: 2, parts: [{ id: 'xp', type: 'text', text: evil }, { id: 'xt', type: 'tool', tool: '<b>t</b>', callId: 'c', status: 'completed', title: '<img src=x onerror=window.__xss=5>', output: '<script>window.__xss=6</script>' }] }] } });
+  await t.page.waitForSelector('.msg.assistant .md');
+  await t.page.click('.fold.tool .fold-head');
+  for (const link of await t.page.$$('.md [data-href]')) await link.click();
+  await sleep(400);
+  assert.equal(await t.page.evaluate(() => window.__xss), undefined);
+  assert.equal(await t.page.$$eval('.md script, .md iframe, .md img, .md style, .md form, .md input, .md [onclick], .md [onerror], .md a[href]', (els) => els.length), 0);
+  assert.equal(await t.page.evaluate(() => getComputedStyle(document.body).display), 'block');
+  assert.deepEqual(requests, []);
+  // javascript: links are dropped by the sanitizer and never reach the host as navigations.
+  const opened = [...(await t.posted('openExternal')), ...(await t.posted('openFile'))].map((m) => m.url ?? m.path);
+  assert.deepEqual(opened, ['https://ok.example']);
+  assert.equal(await t.text('.fold.tool .tool-name'), '<b>t</b>');
+  await t.page.close();
+});
+
+await test('light theme and a narrow sidebar', async () => {
+  const t = await open('light', 300, 700);
+  await t.host({ type: 'state', state: { ...conversation, usage: usageSummary } });
+  await t.page.waitForSelector('.msg.assistant .md');
+  await t.page.waitForFunction(() => document.querySelector('canvas.oki')?.dataset.renderer === 'webgl', { timeout: 15000 });
+  await sleep(500);
+  // Nothing overflows horizontally at 300px.
+  const overflow = await t.page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
+  assert.ok(overflow <= 0, `no horizontal overflow (${overflow}px)`);
+  const clipped = await t.page.$$eval('.topbar > *, .controls > *', (els) => els.filter((e) => e.getBoundingClientRect().right > window.innerWidth + 0.5).map((e) => e.className));
+  assert.deepEqual(clipped, []);
+  await t.shot('15-conversation-light-narrow');
+  await t.page.click('.usage-btn');
+  await t.page.waitForSelector('.sheet .stats');
+  await t.shot('16-usage-light-narrow');
+  const t2 = await open('light');
+  await t2.host({ type: 'state', state: base });
+  await t2.page.waitForFunction(() => document.querySelector('canvas.oki')?.dataset.renderer === 'webgl', { timeout: 15000 });
+  await sleep(600);
+  await t2.shot('17-empty-light');
+  assert.deepEqual([...t.consoleErrors, ...t2.consoleErrors], []);
+  await t.page.close();
+  await t2.page.close();
+});
+
+await browser.close();
+server.close();
+console.log(results.join('\n'));
+console.log(`\n${results.length - failed} passed, ${failed} failed. Screenshots: ${path.relative(root, outDir)}/`);
+process.exit(failed ? 1 : 0);

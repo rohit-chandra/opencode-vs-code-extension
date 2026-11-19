@@ -1,0 +1,77 @@
+name: Release
+
+# Push a tag like v0.1.0 (matching "version" in package.json) to publish a release.
+on:
+  push:
+    tags: ['v*.*.*']
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+          cache: npm
+      - name: Check that the tag matches package.json
+        run: |
+          version="$(node -p "require('./package.json').version")"
+          if [ "v$version" != "$GITHUB_REF_NAME" ]; then
+            echo "::error::Tag $GITHUB_REF_NAME does not match package.json version $version"
+            exit 1
+          fi
+          echo "VERSION=$version" >> "$GITHUB_ENV"
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run typecheck
+      - run: npm test
+      - name: End-to-end tests with the real CLIs
+        run: |
+          npm install -g opencode-ai @anthropic-ai/claude-code @openai/codex
+          npm run test:e2e
+      - name: Package
+        run: |
+          npm run build:prod
+          npx vsce package --no-dependencies -o "opencode-hub-$VERSION.vsix"
+          sha256sum "opencode-hub-$VERSION.vsix" > "opencode-hub-$VERSION.vsix.sha256"
+      - name: Release notes from the changelog
+        run: |
+          awk -v v="## $VERSION" '$0 == v {found=1; next} found && /^## / {exit} found {print}' CHANGELOG.md > notes.md
+          test -s notes.md || echo "Release $VERSION" > notes.md
+      - name: Create the GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" "opencode-hub-$VERSION.vsix" "opencode-hub-$VERSION.vsix.sha256" --title "OpenCode Hub $VERSION" --notes-file notes.md
+      - uses: actions/upload-artifact@v7
+        with:
+          name: vsix
+          path: opencode-hub-${{ env.VERSION }}.vsix
+          if-no-files-found: error
+
+  publish:
+    # Optional stores. The tokens are only exposed to this job, and each step runs only
+    # when its token is configured as a repository secret.
+    needs: release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      VSCE_PAT: ${{ secrets.VSCE_PAT }}
+      OVSX_PAT: ${{ secrets.OVSX_PAT }}
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: vsix
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+      - name: Publish to the Visual Studio Marketplace
+        if: env.VSCE_PAT != ''
+        run: npx --yes @vscode/vsce publish --packagePath opencode-hub-*.vsix
+      - name: Publish to Open VSX
+        if: env.OVSX_PAT != ''
+        run: npx --yes ovsx publish opencode-hub-*.vsix -p "$OVSX_PAT"

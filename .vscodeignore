@@ -1,0 +1,12 @@
+**
+!package.json
+!README.md
+!CHANGELOG.md
+!LICENSE
+!dist/extension.js
+!dist/webview.js
+!dist/webview.css
+!dist/avatar.js
+!dist/THIRD_PARTY_NOTICES.txt
+!media/icon.png
+!media/activity.svg

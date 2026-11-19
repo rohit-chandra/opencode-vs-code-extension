@@ -1,0 +1,138 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  NODE_VERSION: '22'
+
+jobs:
+  check:
+    name: Lint, types, unit tests, build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run build:prod
+
+  unit-cross-platform:
+    name: Unit tests (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+      - run: npm ci
+      - run: npm test
+
+  e2e:
+    # Drives the real opencode, Claude Code and Codex CLIs against a local mock model
+    # server, so no account or secret is needed.
+    name: End to end with real CLIs (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    # Linux is the gate. Windows and macOS runs are informational until they have a track record.
+    continue-on-error: ${{ matrix.os != 'ubuntu-latest' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+      - run: npm ci
+      - name: Install the CLIs under test
+        run: npm install -g opencode-ai @anthropic-ai/claude-code @openai/codex
+      - run: npm run test:e2e
+
+  ui:
+    name: Webview UI tests (headless Chrome)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+      - run: npm ci
+      - run: npm run build:prod
+      - run: npm run test:ui
+      - name: Upload screenshots
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: ui-screenshots
+          path: test-results/ui
+          if-no-files-found: ignore
+
+  integration:
+    name: Inside VS Code ${{ matrix.vscode }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # Oldest supported version (engines.vscode) and the current release.
+        vscode: ['1.98.2', 'stable']
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+      - run: npm ci
+      - run: npm install -g opencode-ai
+      - run: npm run build
+      - name: Run integration tests
+        run: xvfb-run -a npm run test:integration
+        env:
+          VSCODE_VERSION: ${{ matrix.vscode }}
+
+  package:
+    name: Package .vsix
+    needs: [check, e2e, ui, integration]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+      - run: npm ci
+      - run: npm run package
+      - name: Check the package contents
+        run: |
+          npx vsce ls --no-dependencies | tee files.txt
+          grep -qx 'dist/extension.js' files.txt
+          grep -qx 'dist/webview.js' files.txt
+          grep -qx 'dist/avatar.js' files.txt
+          ! grep -E '(^|/)node_modules/|\.map$|^src/|^test/' files.txt
+      - uses: actions/upload-artifact@v7
+        with:
+          name: opencode-hub-vsix
+          path: opencode-hub.vsix
+          if-no-files-found: error

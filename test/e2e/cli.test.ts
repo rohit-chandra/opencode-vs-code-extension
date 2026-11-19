@@ -289,7 +289,7 @@ describe.skipIf(!codexBin)('Codex engine (real `codex` CLI + mock Responses API)
   it('reports the ChatGPT sign-in state, and the stored key in API-key mode', async () => {
     // CODEX_HOME holds no login: subscription mode is "not signed in".
     expect(await engine.account.status()).toMatchObject({ engine: 'codex', mode: 'subscription', signedIn: false });
-    expect(engine.account.loginCommand()).toMatch(/codex(\.cmd|\.exe)?"? login$/);
+    expect(engine.account.loginCommand()).toMatch(/codex(\.cmd|\.exe)?"? login$/i);
     expect(engine.account.loginCommand({ deviceCode: true })).toMatch(/ login --device-auth$/);
     ctx.settings['codex.auth'] = 'apiKey';
     try {

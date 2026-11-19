@@ -3,7 +3,7 @@ import type { ComponentChildren, FunctionComponent } from 'preact';
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'preact/hooks';
 import type { ChatMessage, Part } from '../../../src/shared/types';
 import { compact, money, tokensIn, tokensOut } from '../format';
-import { IconBrain, IconCheck, IconChevron, IconClose, IconFile, IconImage, IconTool, IconWarn } from '../icons';
+import { IconBrain, IconCheck, IconChevron, IconClose, IconFile, IconImage, IconRefresh, IconTool, IconWarn } from '../icons';
 import { renderBlocks } from '../markdown';
 import { send } from '../store';
 
@@ -185,7 +185,7 @@ const Message = memo(function Message({ message, live }: { message: ChatMessage;
   );
 });
 
-export function MessageList({ messages, busy }: { messages: ChatMessage[]; busy: boolean }) {
+export function MessageList({ messages, busy, canRetry }: { messages: ChatMessage[]; busy: boolean; canRetry: boolean }) {
   const scroller = useRef<HTMLDivElement>(null);
   const stick = useRef(true);
   const [jump, setJump] = useState(false);
@@ -235,6 +235,13 @@ export function MessageList({ messages, busy }: { messages: ChatMessage[]; busy:
       {messages.map((m) => (
         <Message key={m.id} message={m} live={busy && m.id === lastId} />
       ))}
+      {canRetry && !busy && messages.length > 0 && (
+        <div class="retry-row">
+          <button type="button" class="btn small retry" title="Send your last message again" onClick={() => send({ type: 'retry' })}>
+            <IconRefresh size={12} /> Retry
+          </button>
+        </div>
+      )}
       {jump && (
         <button
           type="button"

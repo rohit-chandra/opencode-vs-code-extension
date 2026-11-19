@@ -65,6 +65,8 @@ export class ChatController {
   private nonce = 0;
   private activation = 0;
   private webviewReady = false;
+  /** The user pressed stop during the running turn. */
+  private stopRequested = false;
   /** Renderer the webview's companion is using, once it has mounted. */
   avatarRenderer: 'webgl' | '2d' | undefined;
 
@@ -95,6 +97,8 @@ export class ChatController {
       avatar: { enabled: host.config<boolean>('avatar.enabled', true), style: avatarStyle(host.config<string>('avatar.style', 'buddy')) },
       zoom: clampZoom(host.config<number>('chat.zoom', 1)),
       trusted: host.workspaceTrusted(),
+      canRetry: false,
+      recentModels: [],
       panel: { name: 'none', nonce: 0 },
       notice: undefined,
       loading: true,
@@ -158,6 +162,8 @@ export class ChatController {
   }
 
   private set(patch: Partial<ViewState>): void {
+    // The retry offer belongs to one conversation; it does not follow you to another.
+    if ('sessionId' in patch && patch.sessionId !== this.state.sessionId && this.state.sessionId !== undefined && this.state.canRetry && patch.canRetry === undefined) patch = { ...patch, canRetry: false };
     this.state = { ...this.state, ...patch };
     if (!this.webviewReady) return;
     this.flushEvents(); // keep ordering: streamed events first, then the patch that follows them
@@ -225,7 +231,8 @@ export class ChatController {
     }
     let agent = this.host.state.get<string>(`agent.${engine.id}`);
     if (!agent || !agents.some((a) => a.name === agent)) agent = agents[0]?.name;
-    this.set({ providers, agents, commands: mergeCommands(commands), model, agent });
+    const recentModels = (this.host.state.get<ModelRef[]>(`recentModels.${engine.id}`) ?? []).filter(exists).slice(0, MAX_RECENT_MODELS);
+    this.set({ providers, agents, commands: mergeCommands(commands), model, agent, recentModels });
   }
 
   private async refreshMcp(): Promise<void> {
@@ -286,9 +293,16 @@ export class ChatController {
         this.set(patch);
         return;
       }
-      case 'session.status':
-        if (event.sessionId === this.state.sessionId) this.set({ activity: event.activity, activityDetail: event.detail });
+      case 'session.status': {
+        if (event.sessionId !== this.state.sessionId) return;
+        const ended = this.state.activity !== 'idle' && event.activity === 'idle';
+        const last = this.state.messages[this.state.messages.length - 1];
+        // A turn that was stopped, or ended in an error, can be sent again with one click.
+        const canRetry = ended ? this.stopRequested || (last?.role === 'assistant' && !!last.error) : event.activity === 'idle' ? this.state.canRetry : false;
+        if (ended) this.stopRequested = false;
+        this.set({ activity: event.activity, activityDetail: event.detail, canRetry });
         return;
+      }
       case 'message.updated':
       case 'message.removed':
       case 'part.updated':
@@ -392,7 +406,7 @@ export class ChatController {
 
   async setEngine(engine: EngineId): Promise<void> {
     if (!this.engines.has(engine) || engine === this.state.engine) return;
-    this.set({ engine, capabilities: this.engines.get(engine)!.capabilities, sessions: [], sessionId: undefined, messages: [], permissions: [], questions: [], providers: [], agents: [], mcp: [], model: undefined, agent: undefined, activity: 'idle', sessionUsage: undefined, commands: mergeCommands([]) });
+    this.set({ engine, capabilities: this.engines.get(engine)!.capabilities, sessions: [], sessionId: undefined, messages: [], permissions: [], questions: [], providers: [], agents: [], mcp: [], model: undefined, agent: undefined, activity: 'idle', sessionUsage: undefined, commands: mergeCommands([]), canRetry: false, recentModels: [] });
     await this.host.state.update('engine', engine);
     await this.activate();
   }
@@ -420,8 +434,11 @@ export class ChatController {
   }
 
   async setModel(model: ModelRef): Promise<void> {
-    this.set({ model });
+    const same = (m: ModelRef) => m.providerId === model.providerId && m.modelId === model.modelId;
+    const recentModels = [model, ...this.state.recentModels.filter((m) => !same(m))].slice(0, MAX_RECENT_MODELS);
+    this.set({ model, recentModels });
     await this.host.state.update(`model.${this.state.engine}`, model);
+    await this.host.state.update(`recentModels.${this.state.engine}`, recentModels);
   }
 
   async pickModel(): Promise<void> {
@@ -526,7 +543,8 @@ export class ChatController {
     const sessionId = await this.ensureSession();
     if (!sessionId) return;
     const input = { text, attachments: this.state.attachments, model: this.state.model, agent: this.state.agent };
-    this.set({ attachments: [], activity: 'busy', activityDetail: undefined });
+    this.stopRequested = false;
+    this.set({ attachments: [], activity: 'busy', activityDetail: undefined, canRetry: false });
     try {
       const engineCommand = slash && this.state.commands.find((c) => c.name === slash.name && c.source !== 'builtin');
       if (slash && engineCommand) await engine.runCommand(sessionId, slash.name, slash.args, input);
@@ -538,7 +556,21 @@ export class ChatController {
   }
 
   async abort(): Promise<void> {
-    if (this.state.sessionId) await this.guard('Could not stop', () => this.engine.abort(this.state.sessionId!));
+    if (!this.state.sessionId) return;
+    if (this.state.activity !== 'idle') this.stopRequested = true;
+    await this.guard('Could not stop', () => this.engine.abort(this.state.sessionId!));
+  }
+
+  /** Send the last user message again, after a reply that failed or was stopped. */
+  async retry(): Promise<void> {
+    if (this.state.activity !== 'idle') return;
+    const lastUser = [...this.state.messages].reverse().find((m) => m.role === 'user');
+    const text = lastUser?.parts.map((p) => (p.type === 'text' ? p.text : '')).join('').trim();
+    if (!text) {
+      this.notify('warn', 'There is no message to send again.');
+      return;
+    }
+    await this.send(text);
   }
 
   private localMessage(markdown: string): void {
@@ -836,6 +868,8 @@ export class ChatController {
         return this.send(msg.text);
       case 'abort':
         return this.abort();
+      case 'retry':
+        return this.retry();
       case 'newSession':
         return this.newSession();
       case 'switchSession':
@@ -958,6 +992,8 @@ const ENGINE_DETAILS: Record<EngineId, string> = {
 function avatarStyle(value: string): AvatarStyle {
   return value === 'dots' || value === 'orb' ? 'dots' : 'buddy';
 }
+
+const MAX_RECENT_MODELS = 5;
 
 function clampZoom(value: number): number {
   const n = Number.isFinite(value) ? value : 1;

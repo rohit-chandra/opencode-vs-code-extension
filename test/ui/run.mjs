@@ -469,6 +469,60 @@ await test('engine, model and agent pickers', async () => {
   await t.page.close();
 });
 
+await test('context meter, retry after a failed reply, and recent models', async () => {
+  const t = await open();
+  // The fixture's last reply used a small part of a 1M-token window: a quiet ring, no number.
+  await t.host({ type: 'state', state: conversation });
+  await t.page.waitForSelector('.context-meter');
+  assert.equal(await t.page.$eval('.context-meter', (e) => e.className), 'context-meter ok');
+  assert.equal(await t.page.$('.context-pct'), null);
+  assert.match(await t.page.$eval('.context-meter', (e) => e.title), /^Context: about 24k of 1.0M tokens \(\d+%\)\.$/);
+  // Same reply on a model with a small window: the meter turns into a warning with a percentage and advice.
+  const used = await t.page.$eval('.context-meter', (e) => e.title);
+  const small = JSON.parse(JSON.stringify(conversation));
+  const lastWithUsage = small.messages.filter((m) => m.usage).pop();
+  const total = lastWithUsage.usage.input + lastWithUsage.usage.output + lastWithUsage.usage.reasoning + lastWithUsage.usage.cacheRead + lastWithUsage.usage.cacheWrite;
+  small.providers[0].models[0].contextWindow = Math.round(total / 0.93);
+  await t.host({ type: 'state', state: small });
+  await t.page.waitForFunction(() => document.querySelector('.context-meter')?.classList.contains('full'));
+  assert.equal(await t.text('.context-pct'), '93%');
+  assert.match(await t.page.$eval('.context-meter', (e) => e.title), /Run \/compact to make room\.$/);
+  assert.notEqual(await t.page.$eval('.context-meter', (e) => e.title), used);
+  await t.shot('21-context-meter-dark');
+  await t.clearPosted();
+  await t.page.click('.context-meter');
+  assert.deepEqual(await t.posted('send'), [{ type: 'send', text: '/usage' }]);
+
+  // Retry shows only when the host offers it, and never while a reply is running.
+  assert.equal(await t.page.$('.retry'), null);
+  await t.host({ type: 'patch', patch: { canRetry: true } });
+  await t.page.waitForSelector('.retry');
+  await t.shot('22-retry-dark');
+  await t.clearPosted();
+  await t.page.click('.retry');
+  assert.deepEqual(await t.posted('retry'), [{ type: 'retry' }]);
+  await t.host({ type: 'patch', patch: { activity: 'busy' } });
+  await t.page.waitForFunction(() => !document.querySelector('.retry'));
+  await t.host({ type: 'patch', patch: { activity: 'idle', canRetry: false } });
+
+  // Recent models sit above the provider groups, and disappear while searching.
+  await t.host({ type: 'patch', patch: { recentModels: [{ providerId: 'openrouter', modelId: 'qwen/qwen3-coder' }, { providerId: 'anthropic', modelId: 'claude-sonnet-5-5' }, { providerId: 'gone', modelId: 'removed-model' }] } });
+  await t.page.click('.pill.model');
+  await t.page.waitForSelector('.sheet .group.recent');
+  assert.deepEqual(await t.page.$$eval('.sheet .group.recent .row-title', (els) => els.map((e) => e.textContent)), ['Qwen3 Coder', 'Claude Sonnet 5.5']);
+  assert.equal(await t.page.$$eval('.sheet .group h3', (els) => els[0].textContent), 'Recent');
+  await t.shot('23-recent-models-dark');
+  await t.clearPosted();
+  await t.page.click('.sheet .group.recent .row .row-main');
+  assert.deepEqual(await t.posted('setModel'), [{ type: 'setModel', model: { providerId: 'openrouter', modelId: 'qwen/qwen3-coder' } }]);
+  await t.page.click('.pill.model');
+  await t.page.waitForSelector('.sheet .search input');
+  await t.page.type('.sheet .search input', 'haiku');
+  await t.page.waitForFunction(() => !document.querySelector('.sheet .group.recent'));
+  assert.deepEqual(t.consoleErrors, []);
+  await t.page.close();
+});
+
 await test('companion: dots style, poke, listening, hide and show', async () => {
   const t = await open();
   await t.host({ type: 'state', state: { ...base, avatar: { enabled: true, style: 'dots' } } });

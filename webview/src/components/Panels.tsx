@@ -137,6 +137,11 @@ export function ModelsPanel({ s, onClose }: { s: ViewState; onClose: () => void 
       return { ...p, models: shown };
     })
     .filter((p) => p.models.length > 0);
+  const recent = s.recentModels.flatMap((ref) => {
+    const provider = s.providers.find((p) => p.id === ref.providerId);
+    const model = provider?.models.find((m) => m.modelId === ref.modelId);
+    return provider && model ? [{ ...model, provider: provider.name }] : [];
+  });
   return (
     <Sheet
       title="Model"
@@ -151,6 +156,25 @@ export function ModelsPanel({ s, onClose }: { s: ViewState; onClose: () => void 
         <IconSearch size={13} />
         <input type="text" placeholder="Search models" value={query} onInput={(e) => setQuery(e.currentTarget.value)} />
       </label>
+      {!q && recent.length > 1 && (
+        <section class="group recent">
+          <h3>Recent</h3>
+          <ul class="list">
+            {recent.map((m) => {
+              const active = s.model?.providerId === m.providerId && s.model?.modelId === m.modelId;
+              return (
+                <li key={`${m.providerId}/${m.modelId}`} class={`row ${active ? 'active' : ''}`}>
+                  <button type="button" class="row-main" onClick={() => (send({ type: 'setModel', model: { providerId: m.providerId, modelId: m.modelId } }), onClose())}>
+                    <span class="row-title">{m.name}</span>
+                    <span class="row-sub">{m.provider}</span>
+                  </button>
+                  {active && <IconCheck size={14} class="row-check" />}
+                </li>
+              );
+            })}
+          </ul>
+        </section>
+      )}
       {groups.length === 0 && <p class="empty-note">{s.providers.length ? 'No model matches.' : 'No models yet. Connect a provider to see its models here.'}</p>}
       {groups.map((p) => (
         <section key={p.id} class="group">

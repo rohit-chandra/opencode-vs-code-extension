@@ -12,6 +12,7 @@
 //     "TOOL_RESULT: <result text>". `[[tool!:NAME {json}]]` skips the "was offered" check.
 //   - If the last user text contains `[[think]]` it emits reasoning first.
 //   - If the last user text contains `[[error]]` it responds with HTTP 500.
+//   - If the last user text contains `[[slow]]` the chat-completions stream pauses 150 ms per chunk.
 import http from 'node:http';
 
 const USAGE = { prompt: 120, completion: 30, cached: 20, reasoning: 5 };
@@ -96,6 +97,7 @@ export function createMockLlm({ delayMs = 2 } = {}) {
     if (p === '/chat/completions') {
       const messages = body.messages || [];
       if (lastUserText(messages).includes('[[error]]')) { res.writeHead(500, { 'content-type': 'application/json' }); res.end(JSON.stringify({ error: { message: 'mock failure', type: 'server_error' } })); return; }
+      const slow = lastUserText(messages).includes('[[slow]]'); // stream slowly enough to be stopped
       const pl = plan(body, messages, (body.tools || []).map((t) => t.function?.name));
       const usage = { prompt_tokens: USAGE.prompt, completion_tokens: USAGE.completion, total_tokens: USAGE.prompt + USAGE.completion, prompt_tokens_details: { cached_tokens: USAGE.cached }, completion_tokens_details: { reasoning_tokens: pl.think ? USAGE.reasoning : 0 } };
       const id = 'chatcmpl-mock' + Date.now();
@@ -112,11 +114,11 @@ export function createMockLlm({ delayMs = 2 } = {}) {
       send({ role: 'assistant', content: '' });
       if (pl.kind === 'tool') {
         send({ tool_calls: [{ index: 0, id: 'call_mock1', type: 'function', function: { name: pl.name, arguments: '' } }] });
-        for (const c of chunks(pl.args, 6)) { send({ tool_calls: [{ index: 0, function: { arguments: c } }] }); await sleep(delayMs); }
+        for (const c of chunks(pl.args, 6)) { send({ tool_calls: [{ index: 0, function: { arguments: c } }] }); await sleep(slow ? 150 : delayMs); }
         send({}, 'tool_calls');
       } else {
-        if (pl.think) for (const c of chunks('Thinking about it...')) { send({ reasoning_content: c }); await sleep(delayMs); }
-        for (const c of chunks(pl.text)) { send({ content: c }); await sleep(delayMs); }
+        if (pl.think) for (const c of chunks('Thinking about it...')) { send({ reasoning_content: c }); await sleep(slow ? 150 : delayMs); }
+        for (const c of chunks(pl.text)) { send({ content: c }); await sleep(slow ? 150 : delayMs); }
         send({}, 'stop');
       }
       res.write(`data: ${JSON.stringify({ id, object: 'chat.completion.chunk', model: body.model, choices: [], usage })}\n\n`);

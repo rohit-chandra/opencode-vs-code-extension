@@ -9,6 +9,9 @@
 - The chat can live on the right: **Move Chat to the Right (Secondary Side Bar)**, **Move Chat to the Left (Primary Side Bar)** and `/move [left|right|editor]`.
 - **Open Chat in an Editor Tab**: a full-size chat that can be split, resized or moved to its own window, and is restored after a reload.
 - Text size for the chat: `Ctrl+Alt+=`, `Ctrl+Alt+-`, `Ctrl+Alt+0`, `/zoom`, and the `opencodeHub.chat.zoom` setting.
+- A context-window meter in the message box, with a warning at 75% and 90% of the model's limit.
+- **Retry** under a reply that failed or was stopped.
+- Recently used models at the top of the model picker.
 - README: system design diagram, a walkthrough of what happens when you send a message, and step-by-step installation.
 
 ### Changed

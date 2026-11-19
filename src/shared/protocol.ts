@@ -47,6 +47,10 @@ export interface ViewState {
   zoom: number;
   trusted: boolean;
   /** Bumped when the host wants the webview to open a panel (e.g. from a command). */
+  /** The last turn failed or was stopped, so the chat offers to send the message again. */
+  canRetry: boolean;
+  /** Models picked lately for the active engine, newest first. */
+  recentModels: ModelRef[];
   panel: { name: 'none' | 'sessions' | 'mcp' | 'usage' | 'models'; nonce: number };
   notice: { level: 'info' | 'warn' | 'error'; text: string; nonce: number } | undefined;
   loading: boolean;
@@ -68,6 +72,7 @@ export type WebviewToHost =
   | { type: 'ready' }
   | { type: 'send'; text: string }
   | { type: 'abort' }
+  | { type: 'retry' }
   | { type: 'newSession' }
   | { type: 'switchSession'; sessionId: string }
   | { type: 'deleteSession'; sessionId: string }

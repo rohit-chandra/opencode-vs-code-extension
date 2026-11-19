@@ -4,6 +4,7 @@ import type { ViewState } from '../../../src/shared/protocol';
 import { ENGINE_LABELS } from '../../../src/shared/types';
 import type { Attachment, EngineId, SlashCommand } from '../../../src/shared/types';
 import { IconChevron, IconClip, IconClose, IconFile, IconImage, IconSend, IconStop } from '../icons';
+import { compact, tokensAll } from '../format';
 import { send, store } from '../store';
 
 type Popup = { kind: 'slash'; items: SlashCommand[]; index: number } | { kind: 'file'; items: { path: string; relative: string }[]; index: number; start: number; query: string } | undefined;
@@ -290,7 +291,38 @@ export function Composer({ s, onOpenPanel }: { s: ViewState; onOpenPanel: (p: 'm
           </span>
         )}
 
+        <ContextMeter s={s} limit={modelInfo?.contextWindow} onOpen={() => send({ type: 'send', text: '/usage' })} />
       </div>
     </div>
+  );
+}
+
+/**
+ * How full the model's context window is, judged by the last reply: its input already
+ * contains the whole conversation so far. A ring, plus the percentage once it matters.
+ */
+function ContextMeter({ s, limit, onOpen }: { s: ViewState; limit: number | undefined; onOpen: () => void }) {
+  if (!limit) return null;
+  let used = 0;
+  for (let i = s.messages.length - 1; i >= 0 && !used; i--) {
+    const m = s.messages[i];
+    if (m.role === 'assistant' && m.usage) used = tokensAll(m.usage);
+  }
+  if (!used) return null;
+  const ratio = Math.min(1, used / limit);
+  const pct = Math.round(ratio * 100);
+  const level = ratio >= 0.9 ? 'full' : ratio >= 0.75 ? 'high' : 'ok';
+  const r = 6;
+  const c = 2 * Math.PI * r;
+  const advice = level === 'ok' ? '' : s.capabilities.compact ? ' Run /compact to make room.' : ' Start a new session soon.';
+  const label = `Context: about ${compact(used)} of ${compact(limit)} tokens (${pct}%).${advice}`;
+  return (
+    <button type="button" class={`context-meter ${level}`} title={label} aria-label={label} onClick={onOpen}>
+      <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true">
+        <circle class="track" cx="8" cy="8" r={r} fill="none" stroke-width="2" />
+        <circle class="fill" cx="8" cy="8" r={r} fill="none" stroke-width="2" stroke-linecap="round" stroke-dasharray={`${(ratio * c).toFixed(2)} ${c.toFixed(2)}`} transform="rotate(-90 8 8)" />
+      </svg>
+      {level !== 'ok' && <span class="context-pct">{pct}%</span>}
+    </button>
   );
 }

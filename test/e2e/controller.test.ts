@@ -263,6 +263,36 @@ describe.skipIf(!bin)('ChatController with the real opencode engine', () => {
     expect(ctx.settings['avatar.style']).toBe('buddy');
   });
 
+  it('offers Retry after a stopped reply and sends the same message again', async () => {
+    await controller.handleMessage({ type: 'newSession' });
+    expect(host.view!.canRetry).toBe(false);
+    await controller.handleMessage({ type: 'send', text: 'count slowly and carefully from one to twenty please [[slow]]' });
+    await host.until((s) => s.activity !== 'idle' && s.messages.some((m) => m.role === 'assistant'), 30_000, 'reply started');
+    await controller.handleMessage({ type: 'abort' });
+    const stopped = await host.until((s) => s.activity === 'idle', 30_000, 'stopped');
+    expect(stopped.canRetry).toBe(true);
+    const users = stopped.messages.filter((m) => m.role === 'user').length;
+    await controller.handleMessage({ type: 'retry' });
+    expect(host.view!.canRetry).toBe(false);
+    const again = await host.until((s) => s.messages.filter((m) => m.role === 'user').length === users + 1, 30_000, 'message sent again');
+    expect(texts(again.messages.filter((m) => m.role === 'user').pop()!.parts).join('')).toContain('count slowly');
+    await controller.handleMessage({ type: 'abort' });
+    await host.until((s) => s.activity === 'idle', 30_000, 'stopped again');
+    // The offer belongs to this conversation only.
+    await controller.handleMessage({ type: 'newSession' });
+    expect(host.view!.canRetry).toBe(false);
+  });
+
+  it('remembers recently used models, newest first', async () => {
+    const all = host.view!.providers.flatMap((p) => p.models);
+    const [a, b] = [all.find((m) => m.modelId === 'mock-large')!, all.find((m) => m.modelId === 'mock-small')!];
+    await controller.handleMessage({ type: 'setModel', model: { providerId: a.providerId, modelId: a.modelId } });
+    await controller.handleMessage({ type: 'setModel', model: { providerId: b.providerId, modelId: b.modelId } });
+    expect(host.view!.recentModels.slice(0, 2).map((m) => m.modelId)).toEqual(['mock-small', 'mock-large']);
+    await controller.handleMessage({ type: 'setModel', model: { providerId: b.providerId, modelId: b.modelId } });
+    expect(host.view!.recentModels.filter((m) => m.modelId === 'mock-small')).toHaveLength(1);
+  });
+
   it('/zoom scales the chat text within limits and /move docks the chat', async () => {
     expect(host.view!.zoom).toBe(1);
     await controller.handleMessage({ type: 'send', text: '/zoom in' });

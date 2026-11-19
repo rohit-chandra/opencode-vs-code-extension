@@ -318,6 +318,7 @@ kbd {
 }
 /* On a wide view (editor tab, large side bar) the conversation stays a readable column. */
 .msg,
+.retry-row,
 .welcome > *,
 .composer > *,
 .requests > * {
@@ -1445,4 +1446,54 @@ kbd {
     animation-duration: 0.001s !important;
     transition-duration: 0.001s !important;
   }
+}
+
+/* Retry after a failed or stopped reply */
+.retry-row {
+  display: flex;
+  padding: 2px 0 8px;
+}
+.btn.retry {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+/* Context window meter, at the end of the composer's control row */
+.context-meter {
+  margin-left: auto;
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 4px;
+  border: 0;
+  border-radius: 4px;
+  background: none;
+  color: var(--oh-muted);
+  font: inherit;
+  font-size: 0.85em;
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+}
+.context-meter:hover {
+  background: var(--vscode-toolbar-hoverBackground, rgba(128, 128, 128, 0.15));
+}
+.context-meter:focus-visible {
+  outline: 1px solid var(--vscode-focusBorder);
+  outline-offset: 1px;
+}
+.context-meter .track {
+  stroke: currentColor;
+  opacity: 0.25;
+}
+.context-meter .fill {
+  stroke: currentColor;
+  transition: stroke-dasharray 0.3s ease;
+}
+.context-meter.high {
+  color: var(--vscode-editorWarning-foreground, #cca700);
+}
+.context-meter.full {
+  color: var(--vscode-errorForeground, #f14c4c);
 }

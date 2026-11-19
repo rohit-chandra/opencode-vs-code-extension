@@ -34,6 +34,8 @@ const EMPTY: ViewState = {
   avatar: { enabled: true, style: 'buddy' },
   zoom: 1,
   trusted: true,
+  canRetry: false,
+  recentModels: [],
   panel: { name: 'none', nonce: 0 },
   notice: undefined,
   loading: true,

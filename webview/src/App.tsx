@@ -184,7 +184,7 @@ export function App() {
             )}
           </div>
         ) : (
-          <MessageList messages={s.messages} busy={busy} />
+          <MessageList messages={s.messages} busy={busy} canRetry={s.canRetry} />
         )}
 
         {!s.avatar.enabled && busy && (

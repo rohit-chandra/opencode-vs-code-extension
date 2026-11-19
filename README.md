@@ -216,6 +216,11 @@ Type `/` to see every command, filtered as you type. Commands defined by the eng
 | `/avatar [on\|off\|buddy\|dots]` | Show, hide or restyle the companion |
 | `/help` | List all commands |
 
+### Retry and recent models
+
+- When a reply fails, or you stop it, a **Retry** button appears under it. It sends your last message again (attachments are not re-sent).
+- The model picker lists the models you used most recently for the current engine at the top, above the full list by provider.
+
 ### Attachments
 
 - Type `@` to search workspace files and attach one.
@@ -251,6 +256,8 @@ Every reply records input, output, reasoning and cached tokens, plus cost when t
 - Under each reply: tokens in and out for that reply.
 - Under the message box and in the status bar: the running total for the session.
 - `/usage`: this session, all sessions, a breakdown by provider and model across every engine, tokens per day and recent sessions.
+
+- In the corner of the message box: a ring that fills as the conversation approaches the model's context window. It turns into a warning with a percentage at 75% and again at 90%, and its tooltip gives the numbers. The figure comes from the last reply, so treat it as an estimate.
 
 Statistics are stored locally in VS Code and survive restarts. *OpenCode Hub: Reset Token Usage Statistics* clears them.
 

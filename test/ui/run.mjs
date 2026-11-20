@@ -1162,6 +1162,22 @@ await test('questions: one at a time, with an answer of your own', async () => {
   await t.page.close();
 });
 
+await test('model picker says it is loading while an engine is asked for the first time', async () => {
+  const t = await open();
+  await t.host({ type: 'state', state: { ...base, providers: [], model: undefined, loading: true } });
+  await t.page.click('.pill.model');
+  await t.page.waitForSelector('.sheet .empty-note');
+  assert.equal(await t.text('.sheet .empty-note'), 'Loading models…');
+  // The list arrives: the note gives way to it without reopening the picker.
+  await t.host({ type: 'patch', patch: { providers: base.providers, model: base.model, loading: false } });
+  await t.page.waitForFunction(() => !document.querySelector('.sheet .empty-note') && document.querySelectorAll('.sheet .row').length > 0);
+  // Nothing connected is a different message.
+  await t.host({ type: 'patch', patch: { providers: [], model: null } });
+  await t.page.waitForFunction(() => document.querySelector('.sheet .empty-note')?.textContent.startsWith('No models yet'));
+  assert.deepEqual(t.consoleErrors, []);
+  await t.page.close();
+});
+
 await test('engine not available, untrusted workspace and toasts', async () => {
   const t = await open();
   const down = { ...base, engine: 'codex', model: undefined, providers: [], mcp: [], agents: [] };

@@ -29,6 +29,10 @@ export class FakeHost implements ControllerHost {
 
   constructor(private readonly ctx: TestContext) {}
 
+  get storageDir() {
+    return this.ctx.storageDir;
+  }
+
   get log() {
     return this.ctx.log;
   }

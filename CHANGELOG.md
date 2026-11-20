@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Changed
+
+- **The model list is there the moment you pick an engine.** Listing models means starting a CLI and asking your account (Claude Code, Codex), booting opencode's server, or calling a BYOK endpoint, which takes from a fraction of a second to several seconds. The chat now keeps the last list of each engine and shows it, with your selected model, agent and effort level, as soon as the engine is selected or VS Code starts; the fresh list is fetched in the background as before and replaces it when it arrives. Only the first use of an engine in a workspace still waits, and the picker says **Loading models…** while it does. The saved copy holds what the picker shows (names and capabilities), never keys or tokens, and no engine is contacted before you pick it.
+
 ## 0.6.0
 
 ### Added

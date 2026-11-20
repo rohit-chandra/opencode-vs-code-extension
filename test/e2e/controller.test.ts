@@ -547,6 +547,70 @@ describe.skipIf(!bin)('ChatController with the real opencode engine', () => {
     expect(host.state.get('engine')).toBe('opencode');
   });
 
+  it('shows the models an engine listed last time at once, and replaces them when the fresh list arrives', async () => {
+    // Hold back an engine's answer, to see what the chat shows while it is still asking.
+    const hold = (engine: Engine) => {
+      const real = engine.listProviders.bind(engine);
+      let release!: () => void;
+      const gate = new Promise<void>((r) => (release = r));
+      let asked = 0;
+      engine.listProviders = async () => {
+        asked++;
+        await gate;
+        return real();
+      };
+      return { release, asked: () => asked, restore: () => void (engine.listProviders = real) };
+    };
+
+    // Switching to an engine used before: its models and the selected one are there while it is still being asked.
+    const direct = engines.get('direct')!;
+    let held = hold(direct);
+    let switching = controller.handleMessage({ type: 'setEngine', engine: 'direct' });
+    let v = await host.until((s) => s.engine === 'direct' && s.providers.some((p) => p.id === 'mockoai' && p.models.length > 0) && !!s.model, 10_000, 'saved Direct BYOK models');
+    expect(v.loading).toBe(true);
+    expect(v.model).toEqual({ providerId: 'mockoai', modelId: 'mock-large' });
+    held.release();
+    await switching;
+    held.restore();
+    expect(held.asked()).toBeGreaterThan(0);
+    expect(host.view!.loading).toBe(false);
+    expect(host.view!.providers.map((p) => p.id)).toEqual(['mockoai']);
+
+    const opencode = engines.get('opencode')!;
+    held = hold(opencode);
+    switching = controller.handleMessage({ type: 'setEngine', engine: 'opencode' });
+    v = await host.until((s) => s.engine === 'opencode' && s.providers.some((p) => p.id === 'mock') && !!s.model && s.agents.length > 0, 10_000, 'saved opencode models');
+    expect(v.loading).toBe(true);
+    expect(v.commands.some((c) => c.name === 'greet')).toBe(true);
+    held.release();
+    await switching;
+    held.restore();
+
+    // A new window (new controller, new engine object, nothing in memory) reads the saved list from disk.
+    await controller.flush();
+    const host2 = new FakeHost(ctx);
+    await host2.state.update('engine', 'direct');
+    const direct2 = new DirectEngine(ctx, mcp);
+    held = hold(direct2);
+    const controller2 = new ChatController(new Map<EngineId, Engine>([['direct', direct2]]), new UsageLedger(new MemoryStore()), host2);
+    try {
+      await controller2.handleMessage({ type: 'ready' });
+      const activating = controller2.activate();
+      const v2 = await host2.until((s) => s.providers.some((p) => p.id === 'mockoai' && p.models.some((m) => m.modelId === 'mock-small')) && !!s.model, 10_000, 'models from the saved list');
+      expect(v2.loading).toBe(true);
+      // No model was chosen in this window, so the one that was selected when the list was saved is.
+      expect(v2.model).toEqual({ providerId: 'mockoai', modelId: 'mock-large' });
+      held.release();
+      await activating;
+      expect(host2.view!.loading).toBe(false);
+      expect(host2.view!.providers.map((p) => p.id)).toEqual(['mockoai']);
+    } finally {
+      held.release();
+      controller2.dispose();
+      await direct2.dispose();
+    }
+  });
+
   it('/feedback opens the form with diagnostics, and sending it opens a pre-filled GitHub issue', async () => {
     host.opened = [];
     await controller.handleMessage({ type: 'send', text: '/feedback idea a cape for Oki' });

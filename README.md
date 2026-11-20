@@ -472,6 +472,7 @@ What happens next: a maintainer reads the issue. For something the project's Cla
 The chat is built to stay out of the editor's way.
 
 - **Fast start.** The extension activates only when you open the chat or run one of its commands. The chat bundle is about 230 KB; the 3D companion is a separate bundle that loads when the browser is idle.
+- **Models without the wait.** Asking an engine for its models can take seconds (a CLI has to start and ask your account, opencode's server has to boot, a BYOK endpoint has to answer). The last list of each engine is kept and shown the moment you select the engine or open VS Code, and the fresh one replaces it when it arrives. Only an engine's first use in a workspace waits.
 - **Smooth streaming.** Tokens are grouped on the extension side and applied once per animation frame. Markdown is parsed block by block, and only the block that is still growing is parsed again. Finished messages are not re-rendered at all.
 - **Long conversations.** Messages that are off screen are skipped by the browser's layout (`content-visibility`). Large model lists are capped and searched as you type.
 - **A cheap companion.** Oki renders only when something moves: about 60 frames per second during a celebration, fewer when idle, and none when the chat is hidden or out of view. Its face is redrawn only when the expression changes.
@@ -520,6 +521,7 @@ A custom provider looks like this:
 - The opencode server the extension starts listens on `127.0.0.1` only and is protected with a random password for each run.
 - Your prompts and attachments go only to the engine and model you selected. The extension has no telemetry and makes no other network requests. Feedback opens a pre-filled GitHub issue in your browser, which you submit yourself.
 - Model output is sanitized before it is shown. The chat view loads no remote content.
+- The saved model lists (for an instant picker) are plain files in the extension's storage folder. They hold model names and capabilities only, and an engine you have not selected is never asked for its list in the background.
 - In an untrusted workspace no engine is started and chat is off, because engines run executables, load project configuration (MCP servers, plugins) and can run tools. Engine settings stored in the workspace (CLI paths, providers, MCP servers) are ignored there.
 - Tool permissions: in Ask mode, opencode permission requests, Claude Code tool calls and MCP tool calls in Direct BYOK and Copilot are shown for approval. Claude Code's requests come through a small MCP server the extension writes to its storage folder and gives the CLI with `--permission-prompt-tool`; it talks only to `127.0.0.1` with a random token per turn. Codex runs non-interactively, so what it may do is set by `codex.sandbox`. In Auto mode everything is approved without asking.
 

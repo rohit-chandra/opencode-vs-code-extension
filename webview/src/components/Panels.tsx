@@ -198,7 +198,7 @@ export function ModelsPanel({ s, onClose }: { s: ViewState; onClose: () => void 
           </ul>
         </section>
       )}
-      {groups.length === 0 && <p class="empty-note">{s.providers.length ? 'No model matches.' : 'No models yet. Connect a provider to see its models here.'}</p>}
+      {groups.length === 0 && <p class="empty-note">{s.providers.length ? 'No model matches.' : s.loading ? 'Loading models…' : 'No models yet. Connect a provider to see its models here.'}</p>}
       {groups.map((p) => (
         <section key={p.id} class="group">
           <h3>{p.name}</h3>

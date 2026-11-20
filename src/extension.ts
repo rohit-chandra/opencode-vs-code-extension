@@ -99,6 +99,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<Openco
     log,
     post: (m) => view.post(m),
     state: folderScopedState(context.globalState, context.workspaceState, cwd),
+    storageDir: engineContext.storageDir,
     secrets: engineContext.secrets,
     config: engineContext.config,
     updateConfig,

@@ -2,6 +2,7 @@ import { promises as fs } from 'node:fs';
 import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { MAX_IMAGE_BYTES, isImageMime, mimeForPath } from '../core/attachments';
+import { CatalogCache } from '../core/catalogCache';
 import type { Disposable } from '../core/emitter';
 import type { Engine, Logger } from '../core/engine';
 import { errorMessage } from '../core/engine';
@@ -18,7 +19,7 @@ import type { AvatarStyle, HostToWebview, ViewState, WebviewToHost } from '../sh
 import { applyMessageEvent, messageText } from '../shared/reducer';
 import { ENGINE_LABELS } from '../shared/types';
 import { approvalMode } from '../shared/types';
-import type { ApprovalMode, Attachment, AuthStatus, ChatMessage, EngineEvent, EngineId, ModelInfo, ModelRef, PromptInput, ProviderInfo, SessionInfo } from '../shared/types';
+import type { AgentInfo, ApprovalMode, Attachment, AuthStatus, ChatMessage, EngineEvent, EngineId, ModelInfo, ModelRef, PromptInput, ProviderInfo, SessionInfo, SlashCommand } from '../shared/types';
 
 export interface PickItem<T> {
   label: string;
@@ -33,6 +34,8 @@ export interface ControllerHost {
   post(message: HostToWebview): void;
   /** Per-workspace persistence (active engine, session, model). */
   state: KeyValueStore;
+  /** A folder for the extension's own files (the saved model lists). */
+  storageDir: string | undefined;
   secrets: { get(key: string): Promise<string | undefined>; set(key: string, value: string): Promise<void>; delete(key: string): Promise<void> };
   config<T>(key: string, fallback: T): T;
   updateConfig(key: string, value: unknown): Promise<void>;
@@ -90,10 +93,13 @@ export class ChatController {
   relistAgainMs = 20_000;
   /** Engine whose providers `state.providers` holds, to tell a new connection from an engine switch. */
   private catalogEngine: EngineId | undefined;
+  /** The last model list of each engine, shown at once while the fresh one is fetched. */
+  private readonly catalog: CatalogCache;
   /** Renderer the webview's companion is using, once it has mounted. */
   avatarRenderer: 'webgl' | '2d' | undefined;
 
   constructor(private readonly engines: Map<EngineId, Engine>, private readonly ledger: UsageLedger, private readonly host: ControllerHost) {
+    this.catalog = new CatalogCache(host.storageDir ? path.join(host.storageDir, 'catalog') : undefined, host.log);
     const configured = host.config<EngineId>('defaultEngine', 'opencode');
     const saved = host.state.get<EngineId>('engine');
     const engine = saved && engines.has(saved) ? saved : engines.has(configured) ? configured : 'opencode';
@@ -159,6 +165,13 @@ export class ChatController {
       return;
     }
     this.set({ loading: true, trusted: true, capabilities: engine.capabilities });
+    // Show what this engine listed last time straight away, so the model can be picked while the
+    // engine starts and its account is asked; the fresh list replaces it below.
+    if (this.state.providers.length === 0) {
+      const cached = await this.catalog.get(engine.id, this.host.cwd());
+      if (run !== this.activation) return;
+      if (cached && this.state.providers.length === 0) this.applyCatalog(engine.id, cached.providers, cached.agents, cached.commands, cached.model);
+    }
     const status = await engine.start();
     if (run !== this.activation) return;
     if (status.state !== 'ready') {
@@ -172,6 +185,11 @@ export class ChatController {
     else this.set({ sessionId: undefined, messages: [], permissions: [], questions: [], activity: 'idle' });
     this.set({ loading: false });
     this.pushUsage();
+  }
+
+  /** Resolves once what the controller saves in the background (the model lists) is on disk. */
+  async flush(): Promise<void> {
+    await this.catalog.flush();
   }
 
   dispose(): void {
@@ -262,16 +280,23 @@ export class ChatController {
       if (added.length) this.notify('info', `Connected: ${added.map((p) => `${p.name} (${p.models.length} model${p.models.length === 1 ? '' : 's'})`).join(', ')}. Pick one with the model button.`);
     }
     this.catalogEngine = engine.id;
-    let model = this.host.state.get<ModelRef>(`model.${engine.id}`);
+    const saved = this.host.state.get<ModelRef>(`model.${engine.id}`);
+    const known = !!saved && providers.some((p) => p.id === saved.providerId && p.models.some((m) => m.modelId === saved.modelId));
+    const fallback = known ? undefined : await engine.defaultModel().catch(() => undefined);
+    if (engine !== this.engine) return;
+    this.applyCatalog(engine.id, providers, agents, commands, fallback);
+    this.catalog.set(engine.id, this.host.cwd(), { at: Date.now(), providers, agents, commands, model: this.state.model });
+  }
+
+  /** Put an engine's models, agents and commands on screen, and settle which model and agent are selected. */
+  private applyCatalog(engineId: EngineId, providers: ProviderInfo[], agents: AgentInfo[], commands: SlashCommand[], fallback: ModelRef | undefined): void {
+    let model = this.host.state.get<ModelRef>(`model.${engineId}`);
     const exists = (m: ModelRef | undefined) => !!m && providers.some((p) => p.id === m.providerId && p.models.some((x) => x.modelId === m.modelId));
-    if (!exists(model)) {
-      const fallback = await engine.defaultModel().catch(() => undefined);
-      model = exists(fallback) ? fallback : providers.flatMap((p) => p.models)[0];
-    }
-    let agent = this.host.state.get<string>(`agent.${engine.id}`);
+    if (!exists(model)) model = exists(fallback) ? fallback : providers.flatMap((p) => p.models)[0];
+    let agent = this.host.state.get<string>(`agent.${engineId}`);
     if (!agent || !agents.some((a) => a.name === agent)) agent = agents[0]?.name;
-    const recentModels = (this.host.state.get<ModelRef[]>(`recentModels.${engine.id}`) ?? []).filter(exists).slice(0, MAX_RECENT_MODELS);
-    this.set({ providers, agents, commands: mergeCommands(commands), model, effort: resolveEffort(this.host.state.get<string>(`effort.${engine.id}`), findModel(providers, model)), agent, recentModels });
+    const recentModels = (this.host.state.get<ModelRef[]>(`recentModels.${engineId}`) ?? []).filter(exists).slice(0, MAX_RECENT_MODELS);
+    this.set({ providers, agents, commands: mergeCommands(commands), model, effort: resolveEffort(this.host.state.get<string>(`effort.${engineId}`), findModel(providers, model)), agent, recentModels });
   }
 
   private async refreshMcp(): Promise<void> {

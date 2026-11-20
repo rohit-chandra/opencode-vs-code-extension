@@ -6,14 +6,32 @@ import { LocalEngine } from '../../core/localEngine';
 import type { Turn } from '../../core/localEngine';
 import { estimateCost } from '../../core/usageLedger';
 import type { McpManager, McpTool } from '../../mcp/manager';
-import type { EngineCapabilities, McpServerInfo, ModelInfo, ModelRef, ProviderInfo } from '../../shared/types';
+import { toEffortLevels } from '../../shared/effort';
+import { ASK_USER_TOOL } from '../../shared/questions';
+import type { EffortLevel, EngineCapabilities, McpServerInfo, ModelInfo, ModelRef, ProviderInfo } from '../../shared/types';
 import { dropOldestTurns, isContextOverflow, startForBudget } from './context';
 import { resolveProvider, secretKeyFor } from './presets';
 import type { ProviderConfig } from './presets';
 import { fetchModelIds, streamAnthropic, streamOpenAi } from './wire';
-import type { StreamResult, WireBlock, WireMessage } from './wire';
+import type { StreamResult, ToolSpec, WireBlock, WireMessage } from './wire';
 
 const MAX_TOOL_ROUNDS = 30;
+
+/**
+ * Effort levels offered for a provider. A BYOK endpoint does not say which models think, so
+ * every model gets the levels its API takes; a model that rejects the setting is sent again
+ * without it (see `runTurn`). OpenAI-compatible: `reasoning_effort`. Anthropic: `output_config.effort`.
+ */
+const OPENAI_EFFORTS = toEffortLevels(['low', 'medium', 'high'])!;
+const ANTHROPIC_EFFORTS = toEffortLevels(['low', 'medium', 'high', 'xhigh', 'max'])!;
+function effortsFor(type: string): EffortLevel[] {
+  return type === 'anthropic' ? ANTHROPIC_EFFORTS : OPENAI_EFFORTS;
+}
+
+/** The provider refused the request itself (as opposed to the key, the rate or the server). */
+function isRejectedRequest(err: unknown): boolean {
+  return /\((400|422)\)/.test(err instanceof Error ? err.message : String(err ?? ''));
+}
 const MODEL_CACHE_MS = 10 * 60_000;
 
 export const DEFAULT_SYSTEM_PROMPT =
@@ -44,6 +62,9 @@ export class DirectEngine extends LocalEngine {
   private modelCache = new Map<string, { at: number; models: ModelInfo[]; error?: string }>();
   /** Tools the user allowed "always" during this window. */
   private allowed = new Set<string>();
+  /** `provider/model` pairs that refused an effort level, or tool definitions, in this window. */
+  private noEffort = new Set<string>();
+  private noTools = new Set<string>();
 
   constructor(ctx: EngineContext, private readonly mcp: McpManager) {
     super(ctx, 'direct');
@@ -74,6 +95,8 @@ export class DirectEngine extends LocalEngine {
 
   invalidateModels(): void {
     this.modelCache.clear();
+    this.noEffort.clear();
+    this.noTools.clear();
     this.state = { engine: 'direct', state: 'idle' };
   }
 
@@ -82,7 +105,8 @@ export class DirectEngine extends LocalEngine {
       this.providers().map(async (p) => {
         const key = await this.apiKey(p);
         const connected = p.keyless || !!key;
-        let models: ModelInfo[] = (p.models ?? []).map((id) => ({ providerId: p.id, modelId: id, name: id, pricing: p.pricing?.[id], supportsTools: true }));
+        const efforts = effortsFor(p.type);
+        let models: ModelInfo[] = (p.models ?? []).map((id) => ({ providerId: p.id, modelId: id, name: id, pricing: p.pricing?.[id], supportsTools: true, efforts }));
         if (models.length === 0 && connected) {
           const cached = this.modelCache.get(p.id);
           if (cached && Date.now() - cached.at < MODEL_CACHE_MS) {
@@ -90,7 +114,7 @@ export class DirectEngine extends LocalEngine {
           } else {
             try {
               const ids = await fetchModelIds(p.type, p.baseUrl, key, p.headers);
-              models = ids.map((m) => ({ providerId: p.id, modelId: m.id, name: m.name ?? m.id, pricing: p.pricing?.[m.id], supportsTools: true })).sort((a, b) => a.name.localeCompare(b.name));
+              models = ids.map((m) => ({ providerId: p.id, modelId: m.id, name: m.name ?? m.id, pricing: p.pricing?.[m.id], supportsTools: true, efforts })).sort((a, b) => a.name.localeCompare(b.name));
               this.modelCache.set(p.id, { at: Date.now(), models });
             } catch (err) {
               this.ctx.log.warn(`Could not list models for ${p.id}: ${err instanceof Error ? err.message : String(err)}`);
@@ -135,8 +159,13 @@ export class DirectEngine extends LocalEngine {
     for (const r of resolved) if (r.image) blocks.push({ type: 'image', mime: r.image.mime, data: r.image.data });
     wire.push({ role: 'user', blocks });
 
-    const tools = await this.mcp.tools().catch(() => [] as McpTool[]);
-    const byName = new Map(tools.map((t) => [t.name, t]));
+    const mcpTools = await this.mcp.tools().catch(() => [] as McpTool[]);
+    const byName = new Map(mcpTools.map((t) => [t.name, t]));
+    const modelKey = `${provider.id}/${input.model.modelId}`;
+    // The model may ask clarifying questions through a tool of ours, unless it turned out not to take tools.
+    let askUser = this.offersAskUser() && !this.noTools.has(modelKey);
+    const offered = (): ToolSpec[] => (askUser ? [...mcpTools, ASK_USER_TOOL] : mcpTools);
+    let effort = input.effort && !this.noEffort.has(modelKey) ? input.effort : undefined;
     const system = [DEFAULT_SYSTEM_PROMPT, this.ctx.cwd() ? `Workspace folder: ${this.ctx.cwd()}` : '', this.ctx.config<string>('systemPrompt', '')].filter(Boolean).join('\n\n');
     const stream = provider.type === 'anthropic' ? streamAnthropic : streamOpenAi;
     const pricing = provider.pricing?.[input.model.modelId];
@@ -162,12 +191,31 @@ export class DirectEngine extends LocalEngine {
       for (;;) {
         try {
           result = await stream(
-            { baseUrl: provider.baseUrl, apiKey, headers: provider.headers, model: input.model.modelId, system, messages: start ? wire.slice(start) : wire, tools: tools.length ? tools : undefined, signal },
+            { baseUrl: provider.baseUrl, apiKey, headers: provider.headers, model: input.model.modelId, system, messages: start ? wire.slice(start) : wire, tools: offered().length ? offered() : undefined, effort, signal },
             { onText: (d) => assistant.text(d), onReasoning: (d) => assistant.reasoning(d) },
           );
           break;
         } catch (err) {
-          if (signal.aborted || !isContextOverflow(err)) throw err;
+          if (signal.aborted) throw err;
+          const message = err instanceof Error ? err.message : String(err);
+          if (!isContextOverflow(err)) {
+            // Not every model takes tools or an effort level, and a BYOK endpoint does not say which
+            // do. Send the request again without the part it refused, and remember that for the model.
+            if (askUser && mcpTools.length === 0 && isRejectedRequest(err) && /tool|function/i.test(message)) {
+              askUser = false;
+              this.noTools.add(modelKey);
+              this.ctx.log.info(`Direct BYOK: ${modelKey} does not take tools, so it cannot ask questions through the chat (${message})`);
+              continue;
+            }
+            if (effort && isRejectedRequest(err)) {
+              this.ctx.log.info(`Direct BYOK: ${modelKey} refused effort "${effort}" (${message})`);
+              assistant.notice('info', `${input.model.modelId} did not accept the "${effort}" effort level, so this reply uses the model's default.`);
+              this.noEffort.add(modelKey);
+              effort = undefined;
+              continue;
+            }
+            throw err;
+          }
           const next = dropOldestTurns(wire, start);
           if (next === start) throw new Error(`${err instanceof Error ? err.message : String(err)} Your last message (with its attachments and tool results) is larger than the model's context window on its own. Attach less, or pick a model with a larger window.`, { cause: err });
           this.ctx.log.info(`Direct BYOK: context window full for ${input.model.modelId}, leaving out messages before #${next}`);
@@ -186,7 +234,8 @@ export class DirectEngine extends LocalEngine {
       const results: WireBlock[] = [];
       for (const call of result.toolCalls) {
         const tool = byName.get(call.name);
-        const label = tool ? `${tool.server} › ${tool.tool}` : call.name;
+        const asking = askUser && call.name === ASK_USER_TOOL.name;
+        const label = asking ? 'Question' : tool ? `${tool.server} › ${tool.tool}` : call.name;
         let args: unknown = {};
         try {
           args = call.args ? JSON.parse(call.args) : {};
@@ -198,6 +247,13 @@ export class DirectEngine extends LocalEngine {
           assistant.tool(call.id, isError ? { status: 'error', error: textOut } : { status: 'completed', output: textOut });
           results.push({ type: 'tool_result', id: call.id, name: call.name, text: textOut, isError });
         };
+        if (asking) {
+          assistant.tool(call.id, { status: 'running' });
+          const answer = await this.runAskUser(session.info.id, args, signal);
+          if (signal.aborted) return;
+          done(answer.text, answer.isError);
+          continue;
+        }
         if (!tool) {
           done(`Unknown tool "${call.name}".`, true);
           continue;

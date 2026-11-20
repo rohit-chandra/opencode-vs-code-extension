@@ -46,6 +46,8 @@ export interface ChatRequest {
   messages: WireMessage[];
   tools?: ToolSpec[];
   maxTokens?: number;
+  /** Thinking effort (`low`, `medium`, `high`, ...); left out of the request when absent. */
+  effort?: string;
   signal?: AbortSignal;
 }
 
@@ -104,6 +106,7 @@ export async function streamOpenAi(req: ChatRequest, handlers: StreamHandlers): 
     stream: true,
     stream_options: { include_usage: true },
   };
+  if (req.effort) body.reasoning_effort = req.effort;
   if (req.tools?.length) body.tools = req.tools.map((t) => ({ type: 'function', function: { name: t.name, description: t.description, parameters: t.inputSchema } }));
   const headers: Record<string, string> = { 'content-type': 'application/json', accept: 'text/event-stream', ...req.headers };
   if (req.apiKey) headers.authorization = `Bearer ${req.apiKey}`;
@@ -231,6 +234,11 @@ export async function streamAnthropic(req: ChatRequest, handlers: StreamHandlers
     stream: true,
   };
   if (req.system) body.system = req.system;
+  if (req.effort) {
+    body.output_config = { effort: req.effort };
+    // Thinking counts toward max_tokens, so the higher levels need room for it as well as the reply.
+    if (!req.maxTokens && /^(high|xhigh|max)$/.test(req.effort)) body.max_tokens = req.effort === 'high' ? 32_000 : 64_000;
+  }
   if (req.tools?.length) body.tools = req.tools.map((t) => ({ name: t.name, description: t.description, input_schema: t.inputSchema }));
   const headers: Record<string, string> = { 'content-type': 'application/json', accept: 'text/event-stream', 'anthropic-version': '2023-06-01', ...req.headers };
   if (req.apiKey) headers['x-api-key'] = req.apiKey;

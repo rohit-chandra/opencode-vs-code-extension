@@ -2,7 +2,8 @@ import { randomBytes } from 'node:crypto';
 import { promises as fs } from 'node:fs';
 import * as http from 'node:http';
 import * as path from 'node:path';
-import type { PermissionReply, PermissionRequest } from '../../shared/types';
+import { QUESTIONS_SKIPPED, answersByQuestion, parseQuestions } from '../../shared/questions';
+import type { PermissionReply, PermissionRequest, QuestionItem } from '../../shared/types';
 
 /**
  * Lets Claude Code ask the user before it acts, although it runs non-interactively.
@@ -11,15 +12,25 @@ import type { PermissionReply, PermissionRequest } from '../../shared/types';
  * needs approval. We give it a tiny stdio MCP server (written to the extension's storage)
  * that forwards each call over HTTP on 127.0.0.1 to this process, where the request is shown
  * in the chat. The answer goes back as `{"behavior":"allow"|"deny", ...}`.
+ *
+ * Claude Code's own question tool (`AskUserQuestion`) arrives the same way. It is not a
+ * permission: the questions are shown in the chat, and the answers go back inside the tool's
+ * input (`answers`: question text to answer), which is where the tool reads them from.
  */
+
+/** Claude Code's tool for asking the user clarifying questions. */
+export const ASK_TOOL = 'AskUserQuestion';
 
 export const APPROVER_SERVER = 'ochub_approver';
 export const APPROVER_TOOL = `mcp__${APPROVER_SERVER}__approve`;
 
 type Ask = (request: Omit<PermissionRequest, 'id' | 'sessionId'>) => Promise<PermissionReply>;
+/** Resolves to one list of answers per question, or `null` when the user skips them. */
+type AskQuestions = (questions: QuestionItem[]) => Promise<string[][] | null>;
 
 interface Turn {
   ask: Ask;
+  questions: AskQuestions;
   /** Tools the user chose "Always allow" for, in this session. */
   always: Set<string>;
 }
@@ -32,10 +43,10 @@ export class ClaudeApprover {
   constructor(private readonly storageDir: string) {}
 
   /** Register a turn; returns the MCP server definition to hand to Claude Code, and a disposer. */
-  async open(ask: Ask, always: Set<string>): Promise<{ server: Record<string, unknown>; close: () => void }> {
+  async open(ask: Ask, always: Set<string>, questions: AskQuestions): Promise<{ server: Record<string, unknown>; close: () => void }> {
     await this.listen();
     const token = randomBytes(24).toString('hex');
-    this.turns.set(token, { ask, always });
+    this.turns.set(token, { ask, always, questions });
     const script = await this.writeScript();
     return {
       server: {
@@ -89,6 +100,13 @@ export class ClaudeApprover {
     }
     const tool = String(body.tool_name ?? 'tool');
     const input = body.input && typeof body.input === 'object' ? body.input : {};
+    if (tool === ASK_TOOL) {
+      const questions = parseQuestions(input);
+      if (questions.length > 0) {
+        const answers = await turn.questions(questions).catch(() => null);
+        return reply(200, answers ? { behavior: 'allow', updatedInput: { ...input, answers: answersByQuestion(questions, answers) } } : { behavior: 'deny', message: QUESTIONS_SKIPPED });
+      }
+    }
     if (turn.always.has(tool)) return reply(200, { behavior: 'allow', updatedInput: input });
     const answer = await turn.ask(describe(tool, input, body.tool_use_id)).catch((): PermissionReply => 'reject');
     if (answer === 'always') turn.always.add(tool);

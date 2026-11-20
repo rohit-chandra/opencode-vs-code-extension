@@ -894,20 +894,67 @@ kbd {
   gap: 6px;
   margin-top: 9px;
 }
+.question-top {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 5px;
+  font-size: 0.86em;
+  color: var(--oh-muted);
+}
+.question-header {
+  padding: 0 7px;
+  border: 1px solid var(--oh-border);
+  border-radius: 8px;
+}
+.question-progress {
+  margin-left: auto;
+  font-variant-numeric: tabular-nums;
+}
+.question-hint {
+  margin-top: 2px;
+  font-size: 0.86em;
+  color: var(--oh-muted);
+}
 .options {
   display: flex;
-  flex-wrap: wrap;
-  gap: 5px;
+  flex-direction: column;
+  gap: 4px;
   margin: 7px 0 2px;
 }
 .option {
-  padding: 3px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: 5px 10px;
   border: 1px solid var(--oh-border);
-  border-radius: 999px;
+  border-radius: 5px;
+  text-align: left;
+}
+.option:hover {
+  background: var(--oh-hover);
 }
 .option.selected {
   border-color: var(--oh-accent);
   background: color-mix(in srgb, var(--oh-accent) 18%, transparent);
+}
+.option-desc {
+  font-size: 0.86em;
+  opacity: 0.72;
+}
+.question-input {
+  width: 100%;
+  margin-top: 5px;
+  padding: 5px 9px;
+  border: 1px solid var(--vscode-input-border, var(--oh-border));
+  border-radius: 5px;
+  background: var(--vscode-input-background, transparent);
+  color: var(--vscode-input-foreground, inherit);
+  font: inherit;
+}
+.question-input:focus {
+  outline: 1px solid var(--vscode-focusBorder, var(--oh-accent));
+  outline-offset: -1px;
 }
 .btn {
   display: inline-flex;
@@ -1161,6 +1208,54 @@ kbd {
 }
 .pill.approvals.auto {
   color: var(--oh-warn);
+}
+.pill.effort {
+  flex: none;
+}
+.pill.effort.costly {
+  color: var(--oh-warn);
+}
+.effort-short {
+  display: none;
+}
+@media (max-width: 460px) {
+  .effort-full {
+    display: none;
+  }
+  .effort-short {
+    display: inline;
+  }
+}
+/* Like the approvals menu: placed against the control row, so it stays on screen in a narrow side bar. */
+.controls > .effort-anchor {
+  position: static;
+}
+.effort-menu {
+  left: 0;
+  right: auto;
+  width: min(290px, calc(100vw - 24px));
+  max-height: min(420px, 70vh);
+  overflow-y: auto;
+}
+.menu-check {
+  flex: none;
+  width: 14px;
+  margin-top: 2px;
+}
+.menu-tag {
+  margin-left: 6px;
+  padding: 0 5px;
+  border: 1px solid var(--oh-border);
+  border-radius: 8px;
+  font-size: 0.8em;
+  opacity: 0.8;
+}
+.menu-warn {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--oh-warn);
+  opacity: 1;
 }
 .pill.session-tokens {
   margin-left: auto;

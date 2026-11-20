@@ -2,7 +2,7 @@
   "name": "opencode-hub",
   "displayName": "OpenCode Hub — BYOK AI Chat",
   "description": "Open-source chat for VS Code that works with opencode first, plus Claude Code, Codex (ChatGPT), GitHub Copilot and any OpenAI-compatible or Anthropic model with your own keys. Sessions, /commands, file attachments, MCP toggles, token usage stats and a 3D companion.",
-  "version": "0.5.1",
+  "version": "0.6.0",
   "publisher": "rohit-chandra",
   "license": "MIT",
   "private": true,
@@ -700,6 +700,11 @@
           "minimum": 0.8,
           "maximum": 1.6,
           "description": "Text scale of the chat view. 1 follows VS Code's font size."
+        },
+        "opencodeHub.chat.askQuestions": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "Direct BYOK and Copilot: offer the model a small `ask_user` tool, so it can ask you clarifying questions in the chat (one at a time, with options and room for your own answer) instead of guessing. opencode and Claude Code have a question tool of their own and are not affected. A model that does not take tools goes without it automatically."
         },
         "opencodeHub.chat.providerColors": {
           "type": "boolean",

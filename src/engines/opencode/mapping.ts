@@ -1,4 +1,5 @@
-import type { ChatMessage, McpServerInfo, McpStatus, ModelInfo, Part, PermissionRequest, ProviderInfo, QuestionRequest, SessionInfo, SlashCommand, TokenUsage } from '../../shared/types';
+import { toEffortLevels } from '../../shared/effort';
+import type { ChatMessage, EffortLevel, McpServerInfo, McpStatus, ModelInfo, Part, PermissionRequest, ProviderInfo, QuestionRequest, SessionInfo, SlashCommand, TokenUsage } from '../../shared/types';
 
 /* Loose shapes of the opencode server payloads we consume (see `GET /doc` on a running server). */
 export interface OcTokens {
@@ -153,6 +154,25 @@ interface OcModel {
   reasoning?: boolean;
   tool_call?: boolean;
   status?: string;
+  variants?: unknown;
+}
+
+/**
+ * opencode calls a model's thinking levels "variants": named option sets (`low`, `high`,
+ * `max`, ...) that a prompt selects by name. They come as an object keyed by name, or as a list.
+ */
+export function variantLevels(variants: unknown): EffortLevel[] | undefined {
+  if (!variants || typeof variants !== 'object') return undefined;
+  const names: string[] = [];
+  if (Array.isArray(variants)) {
+    for (const v of variants) {
+      const name = typeof v === 'string' ? v : ((v as { id?: unknown; name?: unknown } | null)?.id ?? (v as { name?: unknown } | null)?.name);
+      if (typeof name === 'string' && (v as { disabled?: unknown })?.disabled !== true) names.push(name);
+    }
+  } else {
+    for (const [name, v] of Object.entries(variants)) if ((v as { disabled?: unknown } | null)?.disabled !== true) names.push(name);
+  }
+  return toEffortLevels(names);
 }
 export interface OcProvider {
   id: string;
@@ -171,6 +191,7 @@ export function mapProvider(p: OcProvider, connected: boolean, authMethods?: { t
       supportsImages: m.capabilities?.input?.image ?? m.capabilities?.attachment ?? m.attachment,
       supportsTools: m.capabilities?.toolcall ?? m.tool_call,
       supportsReasoning: m.capabilities?.reasoning ?? m.reasoning,
+      efforts: variantLevels(m.variants),
       pricing: m.cost && (m.cost.input || m.cost.output) ? { input: m.cost.input ?? 0, output: m.cost.output ?? 0, cacheRead: m.cost.cache?.read, cacheWrite: m.cost.cache?.write } : undefined,
     }))
     .sort((a, b) => a.name.localeCompare(b.name));
@@ -215,11 +236,11 @@ function clipDetail(d: string): string {
   return d.length > 4000 ? d.slice(0, 4000) + '\n…' : d;
 }
 
-export function mapQuestion(q: { id: string; sessionID: string; questions?: { header?: string; question?: string; options?: { label: string; description?: string }[]; multiple?: boolean }[] }): QuestionRequest {
+export function mapQuestion(q: { id: string; sessionID: string; questions?: { header?: string; question?: string; options?: { label: string; description?: string }[]; multiple?: boolean; custom?: boolean }[] }): QuestionRequest {
   return {
     id: q.id,
     sessionId: q.sessionID,
-    questions: (q.questions ?? []).map((x) => ({ header: x.header, question: x.question ?? '', options: x.options ?? [], multiple: x.multiple })),
+    questions: (q.questions ?? []).map((x) => ({ header: x.header, question: x.question ?? '', options: x.options ?? [], multiple: x.multiple, custom: x.custom === false ? false : undefined })),
   };
 }
 
@@ -233,6 +254,7 @@ export interface OcApiModel {
   capabilities?: { tools?: boolean; input?: string[] };
   cost?: { input?: number; output?: number; cache?: { read?: number; write?: number } }[];
   limit?: { context?: number };
+  variants?: unknown;
 }
 
 /**
@@ -259,6 +281,7 @@ export function mergeProviderLists(legacy: ProviderInfo[], apiModels: OcApiModel
       contextWindow: m.limit?.context || undefined,
       supportsImages: m.capabilities?.input?.includes('image'),
       supportsTools: m.capabilities?.tools,
+      efforts: variantLevels(m.variants),
       pricing: cost && (cost.input || cost.output) ? { input: cost.input ?? 0, output: cost.output ?? 0, cacheRead: cost.cache?.read, cacheWrite: cost.cache?.write } : undefined,
     });
   }

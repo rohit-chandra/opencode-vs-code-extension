@@ -6,7 +6,7 @@ import { EngineError } from '../../core/engine';
 import { LocalEngine } from '../../core/localEngine';
 import type { Turn } from '../../core/localEngine';
 import { findExecutable, runCapture, terminalCommand } from '../../core/process';
-import type { AuthMode, AuthStatus, EngineCapabilities, McpServerInfo, ModelInfo, ModelRef, PromptInput, ProviderInfo, SlashCommand } from '../../shared/types';
+import type { AuthMode, AuthStatus, EngineCapabilities, McpServerInfo, ModelInfo, ModelRef, PermissionReply, PromptInput, ProviderInfo, SlashCommand } from '../../shared/types';
 import { FreshList } from './freshList';
 import { claudeInitInfo, claudeModelInfo } from './modelDiscovery';
 import { apiKeySecret, authMode, claudeEnv, parseClaudeAuthStatus, shellExe } from './auth';
@@ -156,10 +156,14 @@ export class ClaudeCodeEngine extends LocalEngine {
     let models = [...(await this.accountModels())];
     const reported = models.length > 0;
     if (!reported) models = [{ providerId: 'claude-code', modelId: 'default', name: 'Default (from Claude Code settings)', supportsImages: true, supportsTools: true }];
+    // Models the CLI did not list run through the same CLI, so they take the same effort levels.
+    const efforts = models.find((m) => m.modelId === 'default')?.efforts ?? models.find((m) => m.efforts)?.efforts;
+    const listed = models.length;
     models.push(...moreModels(models, reported));
     for (const id of Array.isArray(extra) ? extra : []) {
       if (typeof id === 'string' && id.trim() && !models.some((m) => m.modelId === id.trim() || m.resolvedId === id.trim())) models.push({ providerId: 'claude-code', modelId: id.trim(), name: id.trim(), description: 'Added by you', supportsImages: true, supportsTools: true });
     }
+    if (efforts) for (const m of models.slice(listed)) m.efforts = efforts;
     return [{ id: 'claude-code', name: 'Claude Code', connected: true, models }];
   }
 
@@ -236,6 +240,7 @@ export class ClaudeCodeEngine extends LocalEngine {
     const mode = this.ctx.config<string>('claudeCode.permissionMode', 'acceptEdits');
     if (mode && mode !== 'default') args.push('--permission-mode', mode);
     if (input.model && input.model.modelId !== 'default') args.push('--model', input.model.modelId);
+    if (input.effort && /^[A-Za-z0-9_-]+$/.test(input.effort)) args.push('--effort', input.effort);
     const resume = session.meta.claudeSessionId as string | undefined;
     if (resume) {
       args.push('--resume', resume);
@@ -250,28 +255,26 @@ export class ClaudeCodeEngine extends LocalEngine {
       const { defs } = await this.mcpDefinitions();
       Object.assign(servers, Object.fromEntries(Object.entries(defs).filter(([name]) => !state.disabledMcp.includes(name))));
     }
-    // Tool approvals: Claude Code asks our bridge, which shows the request in the chat (or
-    // approves it straight away in Auto mode). Not needed when permissions are bypassed anyway.
-    let approver: { close: () => void } | undefined;
-    if (mode !== 'bypassPermissions') {
-      const sid = session.info.id;
-      const always = this.alwaysAllowed.get(sid) ?? new Set<string>();
-      this.alwaysAllowed.set(sid, always);
-      const opened = await this.approver.open((req) => this.askPermission(sid, req, signal), always);
-      approver = opened;
-      servers[APPROVER_SERVER] = opened.server as McpDefs[string];
-      args.push('--permission-prompt-tool', APPROVER_TOOL);
-      // A permission prompt waits for the user; don't let Claude Code time it out.
-      env.MCP_TOOL_TIMEOUT ??= String(24 * 3600_000);
-    }
-    let mcpFile: string | undefined;
-    if (strict || approver) {
-      mcpFile = path.join(this.ctx.storageDir, `claude-mcp-${session.info.id}.json`);
-      await fs.mkdir(this.ctx.storageDir, { recursive: true });
-      await fs.writeFile(mcpFile, JSON.stringify({ mcpServers: servers }), 'utf8');
-      if (strict) args.push('--strict-mcp-config');
-      args.push('--mcp-config', mcpFile);
-    }
+    // Tool approvals and questions: Claude Code asks our bridge, which shows the request in the chat
+    // (or approves it straight away in Auto mode). With permissions bypassed nothing needs approval,
+    // but Claude's questions still come through the bridge, so it is opened either way.
+    const sid = session.info.id;
+    const always = this.alwaysAllowed.get(sid) ?? new Set<string>();
+    this.alwaysAllowed.set(sid, always);
+    const approver = await this.approver.open(
+      (req) => (mode === 'bypassPermissions' ? Promise.resolve<PermissionReply>('once') : this.askPermission(sid, req, signal)),
+      always,
+      (questions) => this.askQuestions(sid, questions, signal),
+    );
+    servers[APPROVER_SERVER] = approver.server as McpDefs[string];
+    args.push('--permission-prompt-tool', APPROVER_TOOL);
+    // A prompt waits for the user; don't let Claude Code time it out.
+    env.MCP_TOOL_TIMEOUT ??= String(24 * 3600_000);
+    const mcpFile = path.join(this.ctx.storageDir, `claude-mcp-${session.info.id}.json`);
+    await fs.mkdir(this.ctx.storageDir, { recursive: true });
+    await fs.writeFile(mcpFile, JSON.stringify({ mcpServers: servers }), 'utf8');
+    if (strict) args.push('--strict-mcp-config');
+    args.push('--mcp-config', mcpFile);
 
     const translator = new ClaudeStreamTranslator(assistant);
     try {
@@ -315,8 +318,8 @@ export class ClaudeCodeEngine extends LocalEngine {
         throw new Error(`Claude Code exited (code ${code ?? '?'}) before finishing.${stderr.trim() ? ' ' + stderr.trim().slice(-500) : ''}${/login|auth|credential|api key/i.test(stderr) ? ' Use /login to sign in with your Claude account.' : ''}`);
       }
     } finally {
-      approver?.close();
-      if (mcpFile) await fs.rm(mcpFile, { force: true }).catch(() => undefined);
+      approver.close();
+      await fs.rm(mcpFile, { force: true }).catch(() => undefined);
     }
   }
 }

@@ -27,7 +27,7 @@ export function makeOpencodeProject(mockPort: number): { dir: string; env: NodeJ
             npm: '@ai-sdk/openai-compatible',
             name: 'Mock Provider',
             options: { baseURL: `http://127.0.0.1:${mockPort}/v1`, apiKey: 'sk-mock' },
-            models: { 'mock-small': { name: 'Mock Small' }, 'mock-large': { name: 'Mock Large' } },
+            models: { 'mock-small': { name: 'Mock Small' }, 'mock-large': { name: 'Mock Large', reasoning: true, variants: { low: { reasoningEffort: 'low' }, high: { reasoningEffort: 'high' } } } },
           },
         },
         mcp: { mockmcp: { type: 'local', command: [process.execPath, path.resolve('test/fixtures/mock-mcp.mjs')], enabled: true } },

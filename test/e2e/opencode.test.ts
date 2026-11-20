@@ -85,6 +85,21 @@ describe.skipIf(!bin)('opencode engine (real `opencode serve` + mock LLM)', () =
     expect(listed.title).toBe('Mock session title');
   });
 
+  it('offers a model\'s variants as effort levels and sends the chosen one', async () => {
+    const models = (await engine.listProviders()).find((p) => p.id === 'mock')!.models;
+    const large = models.find((m) => m.modelId === 'mock-large')!;
+    expect(large.efforts!.map((e) => e.id)).toEqual(expect.arrayContaining(['low', 'high']));
+    const rec = record(engine);
+    const session = await engine.createSession();
+    const sent = () => mock.log.filter((l) => l.path === '/chat/completions' && JSON.stringify(l.body.messages).includes('effort check')).map((l) => (l.body as { reasoning_effort?: string }).reasoning_effort);
+    await engine.sendPrompt(session.id, { text: 'effort check one', attachments: [], model: { providerId: 'mock', modelId: 'mock-large' }, effort: 'high' });
+    await rec.waitIdle(session.id);
+    expect(sent().at(-1)).toBe('high');
+    await engine.sendPrompt(session.id, { text: 'effort check two', attachments: [], model: { providerId: 'mock', modelId: 'mock-large' }, effort: 'low' });
+    await rec.waitIdle(session.id);
+    expect(sent().at(-1)).toBe('low');
+  });
+
   it('sends attached files and line ranges to the model', async () => {
     const rec = record(engine);
     const session = await engine.createSession();

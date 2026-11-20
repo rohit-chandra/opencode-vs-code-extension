@@ -385,6 +385,50 @@ describe.skipIf(!bin)('ChatController with the real opencode engine', () => {
     await controller.handleMessage({ type: 'send', text: '/model mock-small' });
   });
 
+  it('effort: chosen in the picker or with /effort, sent with the message, kept per engine', async () => {
+    const sent = () => mock.log.filter((l) => l.path === '/chat/completions' && JSON.stringify(l.body.messages).includes('effort probe')).map((l) => l.body.reasoning_effort);
+    // mock-large has two levels (opencode calls them variants); mock-small has none.
+    await controller.handleMessage({ type: 'setModel', model: { providerId: 'mock', modelId: 'mock-large' } });
+    expect(host.view!.providers.find((p) => p.id === 'mock')!.models.find((m) => m.modelId === 'mock-large')!.efforts!.map((e) => e.id)).toEqual(expect.arrayContaining(['low', 'high']));
+    expect(host.view!.effort).toBeUndefined();
+    await controller.handleMessage({ type: 'setEffort', effort: 'high' });
+    expect(host.view!.effort).toBe('high');
+    expect(host.state.get('effort.opencode')).toBe('high');
+    await controller.handleMessage({ type: 'send', text: 'effort probe one' });
+    await host.until((s) => s.activity === 'idle' && s.messages.some((m) => m.role === 'assistant' && !!m.completedAt && texts(m.parts).join('').includes('effort probe one')));
+    expect(sent().at(-1)).toBe('high');
+
+    await controller.handleMessage({ type: 'send', text: '/effort low' });
+    expect(host.view!.effort).toBe('low');
+    expect(host.view!.notice).toMatchObject({ level: 'info', text: 'Effort: Low' });
+    await controller.handleMessage({ type: 'send', text: '/effort' });
+    expect(host.view!.notice!.text).toMatch(/^Effort for Mock Large: Low\. Levels: .*low.*high/);
+    // A level the model does not have is refused, in the picker's message and in the command.
+    await controller.handleMessage({ type: 'send', text: '/effort ultra' });
+    expect(host.view!.notice).toMatchObject({ level: 'warn' });
+    await controller.handleMessage({ type: 'setEffort', effort: 'ultra' });
+    expect(host.view!.effort).toBe('low');
+
+    // A model without the setting: nothing is sent, and the choice comes back with the model that has it.
+    await controller.handleMessage({ type: 'setModel', model: { providerId: 'mock', modelId: 'mock-small' } });
+    expect(host.view!.effort).toBeUndefined();
+    await controller.handleMessage({ type: 'send', text: '/effort high' });
+    expect(host.view!.notice!.text).toMatch(/has no effort setting/);
+    await controller.handleMessage({ type: 'send', text: 'effort probe two' });
+    await host.until((s) => s.activity === 'idle' && s.messages.some((m) => m.role === 'assistant' && !!m.completedAt && texts(m.parts).join('').includes('effort probe two')));
+    expect(sent().at(-1)).toBeUndefined();
+    await controller.handleMessage({ type: 'setModel', model: { providerId: 'mock', modelId: 'mock-large' } });
+    expect(host.view!.effort).toBe('low');
+
+    await controller.handleMessage({ type: 'send', text: '/effort default' });
+    expect(host.view!.effort).toBeUndefined();
+    expect(host.state.get('effort.opencode')).toBeUndefined();
+    await controller.handleMessage({ type: 'send', text: 'effort probe three' });
+    await host.until((s) => s.activity === 'idle' && s.messages.some((m) => m.role === 'assistant' && !!m.completedAt && texts(m.parts).join('').includes('effort probe three')));
+    expect(sent().at(-1)).toBeUndefined();
+    await controller.handleMessage({ type: 'setModel', model: { providerId: 'mock', modelId: 'mock-small' } });
+  });
+
   it('/avatar toggles the companion and writes the setting', async () => {
     expect(host.view!.avatar).toEqual({ enabled: true, style: 'buddy' });
     await controller.handleMessage({ type: 'send', text: '/avatar off' });
@@ -481,6 +525,18 @@ describe.skipIf(!bin)('ChatController with the real opencode engine', () => {
     v = await host.until((s) => !!s.usage?.byModel.some((r) => r.engine === 'direct'), 10_000, 'direct usage row');
     expect(v.usage!.byModel.map((r) => r.engine)).toEqual(expect.arrayContaining(['opencode', 'direct']));
     expect(v.sessionUsage).toMatchObject({ engine: 'direct', messages: 1 });
+
+    // The model asks before it goes on: the questions show up in the chat, and the answers
+    // (a typed one here) go back to it. Nothing is asked for approval on the way.
+    const ask = { questions: [{ question: 'Which port?', header: 'Port', options: [{ label: '3000' }, { label: '8080' }] }, { question: 'TLS?', options: [{ label: 'Yes' }, { label: 'No' }] }] };
+    await controller.handleMessage({ type: 'send', text: `set it up [[tool:ask_user ${JSON.stringify(ask)}]]` });
+    v = await host.until((s) => s.questions.length === 1, 20_000, 'question from the model');
+    expect(v.questions[0].questions.map((q) => q.question)).toEqual(['Which port?', 'TLS?']);
+    expect(v.permissions).toEqual([]);
+    expect(v.activity).not.toBe('idle');
+    await controller.handleMessage({ type: 'questionReply', requestId: v.questions[0].id, answers: [['4321, it is the only free one'], ['Yes']] });
+    v = await host.until((s) => s.activity === 'idle' && s.questions.length === 0 && s.messages.some((m) => texts(m.parts).join('').includes('TOOL_RESULT')), 20_000, 'answer read back');
+    expect(texts(v.messages.at(-1)!.parts).join('')).toBe('TOOL_RESULT: Q: Which port?\nA: 4321, it is the only free one\n\nQ: TLS?\nA: Yes');
 
     await controller.handleMessage({ type: 'send', text: '/undo' });
     expect(host.view!.notice!.text).toMatch(/not supported by the Direct BYOK engine/);

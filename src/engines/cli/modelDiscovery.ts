@@ -1,5 +1,6 @@
 import { killTree, spawnCli } from '../../core/process';
 import { LineSplitter } from '../../core/sse';
+import { toEffortLevels } from '../../shared/effort';
 import type { ModelInfo } from '../../shared/types';
 
 /**
@@ -61,6 +62,8 @@ export interface ClaudeModelEntry {
   resolvedModel?: string;
   displayName?: string;
   description?: string;
+  supportsEffort?: boolean;
+  supportedEffortLevels?: string[];
 }
 
 export interface ClaudeInitInfo {
@@ -100,7 +103,10 @@ export function claudeModelInfo(m: ClaudeModelEntry): ModelInfo {
     name = versioned ?? m.displayName ?? m.value;
     description = (versioned ? parts.slice(1) : parts).join(' · ') || undefined;
   }
-  return { providerId: 'claude-code', modelId: m.value, name, description, resolvedId: m.resolvedModel, supportsImages: true, supportsTools: true };
+  const info: ModelInfo = { providerId: 'claude-code', modelId: m.value, name, description, resolvedId: m.resolvedModel, supportsImages: true, supportsTools: true };
+  const efforts = m.supportsEffort === false ? undefined : toEffortLevels(m.supportedEffortLevels);
+  if (efforts) info.efforts = efforts;
+  return info;
 }
 
 export interface CodexModelEntry {
@@ -111,6 +117,15 @@ export interface CodexModelEntry {
   hidden?: boolean;
   isDefault?: boolean;
   inputModalities?: string[];
+  supportedReasoningEfforts?: { reasoningEffort?: string; description?: string }[];
+  defaultReasoningEffort?: string;
+}
+
+/** The reasoning-effort levels Codex lists for a model, and the one it uses by default. */
+export function codexEfforts(m: CodexModelEntry): Pick<ModelInfo, 'efforts' | 'defaultEffort'> {
+  const efforts = toEffortLevels((m.supportedReasoningEfforts ?? []).filter((e) => typeof e?.reasoningEffort === 'string').map((e) => ({ id: e.reasoningEffort!, description: e.description })));
+  if (!efforts) return {};
+  return efforts.some((e) => e.id === m.defaultReasoningEffort) ? { efforts, defaultEffort: m.defaultReasoningEffort } : { efforts };
 }
 
 /** Models of the signed-in Codex account, from `codex app-server` (`model/list`, all pages). */

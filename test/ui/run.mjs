@@ -1008,6 +1008,160 @@ await test('Ask / Auto approvals, and tokens for the open session', async () => 
   await t.page.close();
 });
 
+await test('effort: a picker for models that have the setting', async () => {
+  const levels = ['low', 'medium', 'high', 'xhigh', 'max'].map((id) => ({ id }));
+  const providers = [
+    {
+      id: 'claude-code',
+      name: 'Claude Code',
+      connected: true,
+      models: [
+        { providerId: 'claude-code', modelId: 'opus', name: 'Opus 5.5', efforts: levels, defaultEffort: 'medium' },
+        { providerId: 'claude-code', modelId: 'legacy', name: 'Legacy model' },
+      ],
+    },
+  ];
+  const state = { ...conversation, engine: 'claude-code', providers, agents: [], agent: undefined, model: { providerId: 'claude-code', modelId: 'opus' }, effort: undefined };
+  const t = await open();
+  await t.host({ type: 'state', state });
+  await t.page.waitForSelector('.pill.effort');
+  // Nothing chosen: the pill shows the model's own level.
+  assert.equal(await t.text('.pill.effort .effort-full'), 'Medium');
+  // At this width the pill shows the short form and keeps the full one for wider views and screen readers.
+  assert.equal(await t.page.$eval('.pill.effort', (el) => [...el.querySelectorAll('.pill-text')].filter((x) => getComputedStyle(x).display !== 'none').map((x) => x.textContent).join()), 'Med');
+  assert.equal(await t.page.$eval('.pill.effort', (el) => el.getAttribute('aria-label')), 'Effort: Medium');
+  assert.equal(await t.page.$('.effort-menu'), null);
+  await t.page.click('.pill.effort');
+  await t.page.waitForSelector('.effort-menu');
+  assert.match(await t.text('.effort-menu .menu-note'), /more thorough, but slower/);
+  const items = await t.page.$$eval('.effort-menu .menu-item', (els) => els.map((e) => [e.querySelector('.menu-label').firstChild.textContent.trim(), e.getAttribute('aria-checked')]));
+  assert.deepEqual(items, [['Default', 'true'], ['Low', 'false'], ['Medium', 'false'], ['High', 'false'], ['Extra high', 'false'], ['Max', 'false']]);
+  assert.equal(await t.text('.effort-menu .menu-item:nth-of-type(1) .menu-desc'), "Medium, the model's own setting");
+  assert.equal(await t.text('.effort-menu .menu-tag'), 'default');
+  // Only the top level carries the warning about limits.
+  assert.deepEqual(await t.page.$$eval('.effort-menu .menu-warn', (els) => els.map((e) => e.closest('.menu-item').querySelector('.menu-label').textContent.trim())), ['Max']);
+  await sleep(200);
+  await t.shot('25-effort-menu-dark');
+  await t.page.click('.effort-menu .menu-item:nth-of-type(4)');
+  assert.deepEqual(await t.posted('setEffort'), [{ type: 'setEffort', effort: 'high' }]);
+  assert.equal(await t.page.$('.effort-menu'), null);
+
+  // The host confirms the choice; the top level is tinted as a reminder.
+  await t.host({ type: 'patch', patch: { effort: 'max' } });
+  await t.page.waitForFunction(() => document.querySelector('.pill.effort .effort-full')?.textContent === 'Max');
+  assert.equal(await t.page.$eval('.pill.effort', (el) => el.classList.contains('costly')), true);
+  await t.page.click('.pill.effort');
+  assert.equal(await t.page.$eval('.effort-menu .menu-item.active .menu-label', (el) => el.firstChild.textContent.trim()), 'Max');
+  // Back to the model's own level.
+  await t.clearPosted();
+  await t.page.click('.effort-menu .menu-item:nth-of-type(1)');
+  assert.deepEqual(await t.posted('setEffort'), [{ type: 'setEffort', effort: null }]);
+  await t.host({ type: 'patch', patch: { effort: null } });
+  await t.page.waitForFunction(() => document.querySelector('.pill.effort .effort-full')?.textContent === 'Medium');
+
+  // A model without the setting has no pill.
+  await t.host({ type: 'patch', patch: { model: { providerId: 'claude-code', modelId: 'legacy' } } });
+  await t.page.waitForFunction(() => !document.querySelector('.pill.effort'));
+
+  // In a narrow side bar the row still fits and the menu stays on screen.
+  const narrow = await open('dark', 300, 700);
+  await narrow.host({ type: 'state', state: { ...state, agents: conversation.agents, agent: 'build', effort: 'xhigh', sessionUsage: conversation.sessionUsage } });
+  await narrow.page.waitForSelector('.pill.effort');
+  const overflow = await narrow.page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
+  assert.ok(overflow <= 0, `no horizontal overflow (${overflow}px)`);
+  assert.deepEqual(await narrow.page.$$eval('.controls > *', (els) => els.filter((e) => e.getBoundingClientRect().right > window.innerWidth + 0.5).map((e) => e.className)), []);
+  await narrow.page.click('.pill.effort');
+  await narrow.page.waitForSelector('.effort-menu');
+  const box = await narrow.page.$eval('.effort-menu', (el) => { const r = el.getBoundingClientRect(); return { left: r.left, right: r.right, top: r.top }; });
+  assert.ok(box.left >= 0 && box.right <= 300 && box.top >= 0, `menu on screen: ${JSON.stringify(box)}`);
+  await narrow.shot('26-effort-menu-narrow');
+  assert.deepEqual([...t.consoleErrors, ...narrow.consoleErrors], []);
+  await narrow.page.close();
+  await t.page.close();
+});
+
+await test('questions: one at a time, with an answer of your own', async () => {
+  const questions = [
+    { header: 'Database', question: 'Which database should the service use?', options: [{ label: 'Postgres', description: 'Relational, what the other services use' }, { label: 'SQLite', description: 'A single file, no server' }] },
+    { header: 'Extras', question: 'Which extras do you want?', options: [{ label: 'Auth' }, { label: 'Search' }, { label: 'Billing' }], multiple: true },
+    { question: 'What should the service be called?', options: [] },
+  ];
+  const t = await open();
+  await t.host({ type: 'state', state: { ...conversation, activity: 'busy', questions: [{ id: 'que_9', sessionId: 'ses_1', questions }] } });
+  await t.page.waitForSelector('.question-card');
+  const title = () => t.text('.question-card .request-title');
+  const buttons = () => t.page.$$eval('.question-card .request-actions .btn', (els) => els.map((e) => [e.textContent.trim(), e.disabled]));
+  const optionLabels = () => t.page.$$eval('.question-card .option-label', (els) => els.map((e) => e.textContent));
+
+  // Only the first question is on screen.
+  assert.equal(await title(), 'Which database should the service use?');
+  assert.equal((await t.page.$$('.question-card .request-title')).length, 1);
+  assert.equal((await t.text('.question-progress')).replace(/\s+/g, ' ').trim(), 'Question 1 of 3');
+  assert.equal(await t.text('.question-header'), 'Database');
+  assert.deepEqual(await optionLabels(), ['Postgres', 'SQLite']);
+  assert.equal(await t.text('.question-card .option-desc'), 'Relational, what the other services use');
+  assert.equal(await t.page.$eval('.question-input', (el) => el.placeholder), 'Or type your own answer');
+  assert.deepEqual(await buttons(), [['Next', true], ['Skip all', false]]);
+  await sleep(200);
+  await t.shot('27-question-one-at-a-time-dark');
+
+  // Pick an option, then type instead: the typed answer replaces the option.
+  await t.page.click('.question-card .option');
+  assert.equal(await t.page.$eval('.question-card .option', (el) => el.getAttribute('aria-checked')), 'true');
+  await t.page.type('.question-input', 'MySQL, we already run it');
+  assert.deepEqual(await t.page.$$eval('.question-card .option', (els) => els.map((e) => e.getAttribute('aria-checked'))), ['false', 'false']);
+  assert.deepEqual(await buttons(), [['Next', false], ['Skip all', false]]);
+  await t.shot('28-question-own-answer-dark');
+  // Enter in the answer box moves on; nothing is sent yet.
+  await t.page.keyboard.press('Enter');
+  await t.page.waitForFunction(() => document.querySelector('.question-card .request-title')?.textContent === 'Which extras do you want?');
+  assert.deepEqual(await t.posted(), (await t.posted()).filter((m) => m.type !== 'questionReply'));
+
+  // Second question: several options and an own answer together.
+  assert.equal((await t.text('.question-progress')).replace(/\s+/g, ' ').trim(), 'Question 2 of 3');
+  assert.equal(await t.text('.question-hint'), 'Choose any that apply.');
+  assert.equal(await t.page.$eval('.question-input', (el) => [el.value, el.placeholder].join('|')), '|Add an answer of your own');
+  assert.deepEqual(await buttons(), [['Back', false], ['Next', true], ['Skip all', false]]);
+  await t.page.click('.question-card .option:nth-child(1)');
+  await t.page.click('.question-card .option:nth-child(3)');
+  await t.page.click('.question-card .option:nth-child(3)');
+  await t.page.click('.question-card .option:nth-child(2)');
+  await t.page.type('.question-input', 'Rate limiting');
+  assert.deepEqual(await t.page.$$eval('.question-card .option', (els) => els.map((e) => e.getAttribute('aria-checked'))), ['true', 'true', 'false']);
+
+  // Back keeps what was answered, and it can be changed.
+  await t.page.click('.question-card .request-actions .btn:nth-child(1)');
+  await t.page.waitForFunction(() => document.querySelector('.question-card .request-title')?.textContent.startsWith('Which database'));
+  assert.equal(await t.page.$eval('.question-input', (el) => el.value), 'MySQL, we already run it');
+  await t.page.click('.question-card .option:nth-child(2)');
+  assert.equal(await t.page.$eval('.question-input', (el) => el.value), '');
+  await t.page.click('.question-card .btn.primary');
+  await t.page.waitForFunction(() => document.querySelector('.question-card .request-title')?.textContent === 'Which extras do you want?');
+  assert.equal(await t.page.$eval('.question-input', (el) => el.value), 'Rate limiting');
+  await t.page.click('.question-card .btn.primary');
+
+  // Last question has no options: the answer box has the cursor, and the button sends everything.
+  await t.page.waitForFunction(() => document.querySelector('.question-card .request-title')?.textContent === 'What should the service be called?');
+  assert.equal((await t.page.$$('.question-card .option')).length, 0);
+  assert.equal(await t.page.$eval('.question-input', (el) => [el.placeholder, document.activeElement === el].join('|')), 'Type your answer|true');
+  assert.deepEqual(await buttons(), [['Back', false], ['Send answers', true], ['Skip all', false]]);
+  await t.page.keyboard.type('  ledger  ');
+  await t.page.click('.question-card .btn.primary');
+  assert.deepEqual(await t.posted('questionReply'), [{ type: 'questionReply', requestId: 'que_9', answers: [['SQLite'], ['Auth', 'Search', 'Rate limiting'], ['ledger']] }]);
+
+  // "Skip all" answers nothing; a question that only takes its options has no answer box.
+  await t.clearPosted();
+  await t.host({ type: 'patch', patch: { questions: [{ id: 'que_10', sessionId: 'ses_1', questions: [{ question: 'Continue with the migration?', options: [{ label: 'Yes' }, { label: 'No' }], custom: false }] }] } });
+  await t.page.waitForFunction(() => document.querySelector('.question-card .request-title')?.textContent === 'Continue with the migration?');
+  assert.equal(await t.page.$('.question-input'), null);
+  assert.equal(await t.page.$('.question-progress'), null);
+  assert.deepEqual(await buttons(), [['Send answer', true], ['Skip', false]]);
+  await t.page.click('.question-card .btn.quiet');
+  assert.deepEqual(await t.posted('questionReply'), [{ type: 'questionReply', requestId: 'que_10', answers: null }]);
+  assert.deepEqual(t.consoleErrors, []);
+  await t.page.close();
+});
+
 await test('engine not available, untrusted workspace and toasts', async () => {
   const t = await open();
   const down = { ...base, engine: 'codex', model: undefined, providers: [], mcp: [], agents: [] };

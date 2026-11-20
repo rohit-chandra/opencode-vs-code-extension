@@ -483,6 +483,8 @@ export class OpencodeEngine implements Engine {
       parts,
       model: input.model ? { providerID: input.model.providerId, modelID: input.model.modelId } : undefined,
       agent: input.agent,
+      // opencode's name for a model's thinking level.
+      variant: input.effort,
     });
   }
 
@@ -498,6 +500,7 @@ export class OpencodeEngine implements Engine {
           arguments: args,
           agent: input.agent,
           model: input.model ? `${input.model.providerId}/${input.model.modelId}` : undefined,
+          variant: input.effort,
           parts: input.attachments.length ? input.attachments.map(toFilePart) : undefined,
         },
         { timeoutMs: 0 },

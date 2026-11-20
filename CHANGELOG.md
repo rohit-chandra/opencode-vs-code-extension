@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.6.0
+
+### Added
+
+- **Effort: choose how hard the model thinks.** Models that have the setting get an effort button next to the model name, with the levels that model offers (for example Low, Medium, High, Extra high and Max), what each one trades, and a warning on the level that uses a plan's limits fastest. **Default** leaves it to the model. Works with Claude Code and Codex (the levels your account's models report), opencode (the model's variants) and Direct BYOK (OpenAI-compatible and Anthropic APIs). `/effort high`, `/effort default` and `/effort` do the same from the keyboard. The choice is kept per engine.
+- **Questions from the agent, one at a time, with room for your own answer.** When the model asks clarifying questions, the chat shows one question at a time with its options and their descriptions, and a box to type an answer of your own instead of (or, where several can be chosen, as well as) the options. **Back** changes an earlier answer; nothing is sent until the last one is answered.
+- **Claude Code can ask you questions in the chat.** Claude's own question tool now reaches the chat in every permission mode. Before, it showed up as an approval card and Claude was told you had not answered.
+- **Direct BYOK and Copilot models can ask too**, through a small `ask_user` tool the extension offers them. `opencodeHub.chat.askQuestions` turns it off, and a model that takes no tools goes without it automatically.
+
+### Changed
+
+- Direct BYOK: when a model refuses an effort level, the message is sent again without it and the chat says so once, instead of failing.
+
 ## 0.5.1
 
 ### Fixed

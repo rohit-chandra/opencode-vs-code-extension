@@ -13,6 +13,8 @@
 //   - If the last user text contains `[[think]]` it emits reasoning first.
 //   - If the last user text contains `[[error]]` it responds with HTTP 500.
 //   - If the last user text contains `[[slow]]` the chat-completions stream pauses 150 ms per chunk.
+//   - A model whose name contains `-notools` rejects requests that carry tools, and one whose name
+//     contains `-noeffort` rejects a reasoning effort, both with HTTP 400.
 //   - A model named `<anything>-ctx<N>` has a context window of N tokens (4 characters each):
 //     larger requests get HTTP 400 with the provider's usual "too long" error.
 import http from 'node:http';
@@ -103,6 +105,12 @@ export function createMockLlm({ delayMs = 2 } = {}) {
     const body = await readBody(req);
     log.push({ path: p, headers: { authorization: req.headers.authorization, 'x-api-key': req.headers['x-api-key'] }, body });
     if (log.length > 200) log.shift();
+
+    // Models that refuse a setting, the way real ones do: HTTP 400 naming the parameter.
+    const modelName = String(body.model ?? '');
+    const refuse = (message) => { res.writeHead(400, { 'content-type': 'application/json' }); res.end(JSON.stringify({ error: { message, type: 'invalid_request_error' } })); };
+    if (/-notools/.test(modelName) && body.tools?.length) return refuse(`${modelName} does not support tools`);
+    if (/-noeffort/.test(modelName) && (body.reasoning_effort || body.output_config?.effort)) return refuse("Unsupported parameter: 'reasoning_effort' is not supported with this model.");
 
     // ---------------- OpenAI chat completions ----------------
     if (p === '/chat/completions') {

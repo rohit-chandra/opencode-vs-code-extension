@@ -28,6 +28,8 @@ describe('Direct BYOK engine (mock OpenAI-compatible + Anthropic servers)', () =
         providers: [
           { id: 'mockoai', name: 'Mock OpenAI', type: 'openai-compatible', baseUrl: `http://127.0.0.1:${port}/v1`, pricing: { 'mock-small': { input: 1, output: 2 } } },
           { id: 'mockant', name: 'Mock Anthropic', type: 'anthropic', baseUrl: `http://127.0.0.1:${port}`, models: ['claude-mock'] },
+          // Models that refuse an effort level, or tools, the way some real ones do.
+          { id: 'mockpicky', name: 'Mock Picky', type: 'openai-compatible', baseUrl: `http://127.0.0.1:${port}/v1`, models: ['mock-noeffort', 'mock-notools'] },
         ],
         // ${workspaceFolder} is expanded like in VS Code launch configs.
         'mcp.servers': { mockmcp: { command: process.execPath, args: ['${workspaceFolder}/test/fixtures/mock-mcp.mjs'] } } as Record<string, McpServerConfig>,
@@ -35,6 +37,7 @@ describe('Direct BYOK engine (mock OpenAI-compatible + Anthropic servers)', () =
     });
     await ctx.secrets.set(secretKeyFor('mockoai'), 'sk-openai-test');
     await ctx.secrets.set(secretKeyFor('mockant'), 'sk-ant-test');
+    await ctx.secrets.set(secretKeyFor('mockpicky'), 'sk-picky-test');
     mcp = new McpManager({
       log: ctx.log,
       cwd: ctx.cwd,
@@ -60,7 +63,11 @@ describe('Direct BYOK engine (mock OpenAI-compatible + Anthropic servers)', () =
     expect(providers.map((p) => [p.id, p.connected, p.models.map((m) => m.modelId)])).toEqual([
       ['mockoai', true, ['mock-large', 'mock-small']],
       ['mockant', true, ['claude-mock']],
+      ['mockpicky', true, ['mock-noeffort', 'mock-notools']],
     ]);
+    // Effort levels are the ones each kind of API takes.
+    expect(providers[0].models[0].efforts!.map((e) => e.id)).toEqual(['low', 'medium', 'high']);
+    expect(providers[1].models[0].efforts!.map((e) => e.id)).toEqual(['low', 'medium', 'high', 'xhigh', 'max']);
   });
 
   it('streams an OpenAI-compatible reply with reasoning, usage and estimated cost', async () => {
@@ -274,6 +281,109 @@ describe('Direct BYOK engine (mock OpenAI-compatible + Anthropic servers)', () =
     }
   });
 
+  it('sends the chosen effort level in the form each API takes', async () => {
+    const rec = record(engine);
+    const oai = await engine.createSession();
+    await engine.sendPrompt(oai.id, { text: 'effort for openai', attachments: [], model: { providerId: 'mockoai', modelId: 'mock-small' }, effort: 'high' });
+    await rec.waitIdle(oai.id);
+    expect(mock.log.filter((l) => l.path === '/chat/completions').pop()!.body.reasoning_effort).toBe('high');
+    await engine.sendPrompt(oai.id, { text: 'no effort chosen', attachments: [], model: { providerId: 'mockoai', modelId: 'mock-small' } });
+    await rec.waitIdle(oai.id);
+    expect(mock.log.filter((l) => l.path === '/chat/completions').pop()!.body.reasoning_effort).toBeUndefined();
+
+    const ant = await engine.createSession();
+    await engine.sendPrompt(ant.id, { text: 'effort for anthropic', attachments: [], model: { providerId: 'mockant', modelId: 'claude-mock' }, effort: 'max' });
+    await rec.waitIdle(ant.id);
+    const req = mock.log.filter((l) => l.path === '/messages').pop()!;
+    expect(req.body.output_config).toEqual({ effort: 'max' });
+    // Thinking counts toward max_tokens, so the top levels get more room.
+    expect(req.body.max_tokens).toBe(64_000);
+    await engine.sendPrompt(ant.id, { text: 'low effort', attachments: [], model: { providerId: 'mockant', modelId: 'claude-mock' }, effort: 'low' });
+    await rec.waitIdle(ant.id);
+    expect(mock.log.filter((l) => l.path === '/messages').pop()!.body).toMatchObject({ output_config: { effort: 'low' }, max_tokens: 8192 });
+  });
+
+  it('answers without the effort level when the model refuses it, says so once, and remembers', async () => {
+    const rec = record(engine);
+    const session = await engine.createSession();
+    const model = { providerId: 'mockpicky', modelId: 'mock-noeffort' };
+    const requests = () => mock.log.filter((l) => l.path === '/chat/completions' && l.body.model === 'mock-noeffort');
+    const before = requests().length;
+    await engine.sendPrompt(session.id, { text: 'think hard', attachments: [], model, effort: 'high' });
+    await rec.waitIdle(session.id);
+    const first = rec.messages(session.id)[1];
+    expect(first.error).toBeUndefined();
+    expect(first.parts.find((p) => p.type === 'notice')).toMatchObject({ level: 'info', text: 'mock-noeffort did not accept the "high" effort level, so this reply uses the model\'s default.' });
+    expect(first.parts.at(-1)).toMatchObject({ type: 'text', text: 'MOCK[mock-noeffort]: think hard' });
+    expect(requests().slice(before).map((l) => l.body.reasoning_effort)).toEqual(['high', undefined]);
+
+    // The next message does not try again, and does not repeat the notice.
+    await engine.sendPrompt(session.id, { text: 'again', attachments: [], model, effort: 'high' });
+    await rec.waitIdle(session.id);
+    expect(requests().slice(before)).toHaveLength(3);
+    expect(requests().at(-1)!.body.reasoning_effort).toBeUndefined();
+    expect(rec.messages(session.id)[3].parts.some((p) => p.type === 'notice')).toBe(false);
+  });
+
+  it('lets the model ask questions in the chat and reads the answers back to it', async () => {
+    const rec = record(engine);
+    const session = await engine.createSession();
+    const model = { providerId: 'mockoai', modelId: 'mock-small' };
+    const ask = { questions: [{ question: 'Which database?', header: 'Database', options: [{ label: 'Postgres', description: 'relational' }, 'SQLite'] }, { question: 'Which extras?', options: [{ label: 'Auth' }, { label: 'Search' }], multiple: true }] };
+    const asked = rec.waitFor('question.asked', (e) => e.request.sessionId === session.id);
+    await engine.sendPrompt(session.id, { text: `build it [[tool:ask_user ${JSON.stringify(ask)}]]`, attachments: [], model });
+    const { request } = await asked;
+    expect(request.questions).toEqual([
+      { question: 'Which database?', header: 'Database', options: [{ label: 'Postgres', description: 'relational' }, { label: 'SQLite' }] },
+      { question: 'Which extras?', options: [{ label: 'Auth' }, { label: 'Search' }], multiple: true },
+    ]);
+    // Asking is not a permission, so Ask mode shows no approval card for it.
+    expect(rec.events.some((e) => e.type === 'permission.asked' && e.request.sessionId === session.id)).toBe(false);
+    expect(await engine.sessionActivity(session.id)).toBe('busy');
+    await engine.replyQuestion(session.id, request.id, [['MySQL, we already run it'], ['Auth', 'Search']]);
+    await rec.waitIdle(session.id);
+    const parts = rec.messages(session.id)[1].parts;
+    expect(parts.find((p) => p.type === 'tool')).toMatchObject({ tool: 'Question', status: 'completed', output: 'Q: Which database?\nA: MySQL, we already run it\n\nQ: Which extras?\nA: Auth, Search' });
+    expect(parts.at(-1)).toMatchObject({ type: 'text', text: 'TOOL_RESULT: Q: Which database?\nA: MySQL, we already run it\n\nQ: Which extras?\nA: Auth, Search' });
+
+    // Skipped questions tell the model to carry on; stopping the turn closes the card.
+    const skipped = await engine.createSession();
+    const asked2 = rec.waitFor('question.asked', (e) => e.request.sessionId === skipped.id);
+    await engine.sendPrompt(skipped.id, { text: `again [[tool:ask_user ${JSON.stringify(ask)}]]`, attachments: [], model });
+    await engine.replyQuestion(skipped.id, (await asked2).request.id, null);
+    await rec.waitIdle(skipped.id);
+    expect(JSON.stringify(rec.messages(skipped.id)[1].parts)).toContain('skipped the questions');
+
+    const stopped = await engine.createSession();
+    const asked3 = rec.waitFor('question.asked', (e) => e.request.sessionId === stopped.id);
+    await engine.sendPrompt(stopped.id, { text: `once more [[tool:ask_user ${JSON.stringify(ask)}]]`, attachments: [], model });
+    const pending = (await asked3).request.id;
+    await engine.abort(stopped.id);
+    await rec.waitIdle(stopped.id);
+    expect(rec.events.some((e) => e.type === 'question.resolved' && e.requestId === pending)).toBe(true);
+  });
+
+  it('keeps working with a model that takes no tools: the question tool is dropped for it', async () => {
+    const rec = record(engine);
+    const session = await engine.createSession();
+    const model = { providerId: 'mockpicky', modelId: 'mock-notools' };
+    await mcp.setEnabled('mockmcp', false);
+    try {
+      const requests = () => mock.log.filter((l) => l.path === '/chat/completions' && l.body.model === 'mock-notools');
+      await engine.sendPrompt(session.id, { text: 'hello there', attachments: [], model });
+      await rec.waitIdle(session.id);
+      expect(rec.messages(session.id)[1].error).toBeUndefined();
+      expect(rec.messages(session.id)[1].parts).toMatchObject([{ type: 'text', text: 'MOCK[mock-notools]: hello there' }]);
+      expect(requests().map((l) => !!l.body.tools)).toEqual([true, false]);
+      await engine.sendPrompt(session.id, { text: 'and again', attachments: [], model });
+      await rec.waitIdle(session.id);
+      expect(requests().map((l) => !!l.body.tools)).toEqual([true, false, false]);
+    } finally {
+      await mcp.setEnabled('mockmcp', true);
+      await mcp.sync();
+    }
+  });
+
   it('Hugging Face: uses HF_TOKEN / HUGGINGFACE_HUB_TOKEN when no key is stored', async () => {
     const hfCtx = makeContext({ settings: { providers: [{ id: 'huggingface', type: 'openai-compatible', baseUrl: `http://127.0.0.1:${port}/v1` }] }, env: { HUGGINGFACE_HUB_TOKEN: 'hf_test_token' } });
     const hf = new DirectEngine(hfCtx, mcp);
@@ -322,8 +432,18 @@ describe('Direct BYOK engine (mock OpenAI-compatible + Anthropic servers)', () =
     await engine.sendPrompt(session.id, { text: 'no tools [[tool:mockmcp__add {"a":1,"b":1}]]', attachments: [], model: { providerId: 'mockoai', modelId: 'mock-small' } });
     await rec.waitIdle(session.id);
     const req = mock.log.filter((l) => l.path === '/chat/completions').pop()!;
-    expect(req.body.tools).toBeUndefined();
+    // Only the built-in question tool is left.
+    expect((req.body.tools as { function: { name: string } }[]).map((t) => t.function.name)).toEqual(['ask_user']);
     expect(rec.messages(session.id)[1].parts.some((p) => p.type === 'tool')).toBe(false);
+    // With that switched off as well, the request carries no tools at all.
+    ctx.settings['chat.askQuestions'] = false;
+    try {
+      await engine.sendPrompt(session.id, { text: 'still no tools', attachments: [], model: { providerId: 'mockoai', modelId: 'mock-small' } });
+      await rec.waitIdle(session.id);
+      expect(mock.log.filter((l) => l.path === '/chat/completions').pop()!.body.tools).toBeUndefined();
+    } finally {
+      delete ctx.settings['chat.askQuestions'];
+    }
 
     await engine.setMcpEnabled('mockmcp', true);
     await mcp.sync();

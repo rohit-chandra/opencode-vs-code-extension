@@ -48,6 +48,13 @@ export interface ModelRef {
   modelId: string;
 }
 
+/** One thinking-effort level of a model, as its engine names it (`low`, `high`, `max`, ...). */
+export interface EffortLevel {
+  id: string;
+  /** What the engine says about the level, when it does. */
+  description?: string;
+}
+
 export interface ModelInfo extends ModelRef {
   name: string;
   /** One line about the model, e.g. "Best for everyday, complex tasks". */
@@ -58,6 +65,10 @@ export interface ModelInfo extends ModelRef {
   supportsImages?: boolean;
   supportsTools?: boolean;
   supportsReasoning?: boolean;
+  /** Thinking effort levels this model accepts, lightest first. Absent when the engine has no such setting for it. */
+  efforts?: EffortLevel[];
+  /** The level the model uses when none is chosen, when the engine says. */
+  defaultEffort?: string;
   /** USD per million tokens, when known. */
   pricing?: { input: number; output: number; cacheRead?: number; cacheWrite?: number };
 }
@@ -143,10 +154,20 @@ export interface PermissionRequest {
   callId?: string;
 }
 
+export interface QuestionItem {
+  header?: string;
+  question: string;
+  options: { label: string; description?: string }[];
+  /** More than one option may be chosen. */
+  multiple?: boolean;
+  /** `false` when the engine only accepts the listed options; otherwise the user may type an answer. */
+  custom?: boolean;
+}
+
 export interface QuestionRequest {
   id: string;
   sessionId: string;
-  questions: { header?: string; question: string; options: { label: string; description?: string }[]; multiple?: boolean }[];
+  questions: QuestionItem[];
 }
 
 export type McpStatus = 'connected' | 'disabled' | 'failed' | 'needs_auth' | 'connecting';
@@ -240,6 +261,8 @@ export interface PromptInput {
   attachments: Attachment[];
   model?: ModelRef;
   agent?: string;
+  /** Thinking effort for this turn (one of the model's `efforts`); absent means the model's default. */
+  effort?: string;
 }
 
 /** Per-model aggregate used by the usage dashboard. */

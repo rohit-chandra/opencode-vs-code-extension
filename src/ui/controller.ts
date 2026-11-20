@@ -12,12 +12,13 @@ import type { KeyValueStore, UsageLedger } from '../core/usageLedger';
 import { PROVIDER_PRESETS, presetById, resolveProvider, secretKeyFor } from '../engines/direct/presets';
 import type { ProviderConfig } from '../engines/direct/presets';
 import { buildIssueUrl, diagnosticsMarkdown, feedbackKind, osLabel } from '../shared/feedback';
+import { effortLabel, isCostlyEffort, matchEffort, resolveEffort } from '../shared/effort';
 import type { EnvironmentInfo, FeedbackKind } from '../shared/feedback';
 import type { AvatarStyle, HostToWebview, ViewState, WebviewToHost } from '../shared/protocol';
 import { applyMessageEvent, messageText } from '../shared/reducer';
 import { ENGINE_LABELS } from '../shared/types';
 import { approvalMode } from '../shared/types';
-import type { ApprovalMode, Attachment, AuthStatus, ChatMessage, EngineEvent, EngineId, ModelRef, ProviderInfo, SessionInfo } from '../shared/types';
+import type { ApprovalMode, Attachment, AuthStatus, ChatMessage, EngineEvent, EngineId, ModelInfo, ModelRef, PromptInput, ProviderInfo, SessionInfo } from '../shared/types';
 
 export interface PickItem<T> {
   label: string;
@@ -108,6 +109,7 @@ export class ChatController {
       activityDetail: undefined,
       providers: [],
       model: undefined,
+      effort: undefined,
       agents: [],
       agent: undefined,
       commands: BUILTIN_COMMANDS,
@@ -269,7 +271,7 @@ export class ChatController {
     let agent = this.host.state.get<string>(`agent.${engine.id}`);
     if (!agent || !agents.some((a) => a.name === agent)) agent = agents[0]?.name;
     const recentModels = (this.host.state.get<ModelRef[]>(`recentModels.${engine.id}`) ?? []).filter(exists).slice(0, MAX_RECENT_MODELS);
-    this.set({ providers, agents, commands: mergeCommands(commands), model, agent, recentModels });
+    this.set({ providers, agents, commands: mergeCommands(commands), model, effort: resolveEffort(this.host.state.get<string>(`effort.${engine.id}`), findModel(providers, model)), agent, recentModels });
   }
 
   private async refreshMcp(): Promise<void> {
@@ -542,7 +544,7 @@ export class ChatController {
 
   async setEngine(engine: EngineId): Promise<void> {
     if (!this.engines.has(engine) || engine === this.state.engine) return;
-    this.set({ engine, capabilities: this.engines.get(engine)!.capabilities, sessions: [], sessionId: undefined, messages: [], permissions: [], questions: [], providers: [], agents: [], mcp: [], model: undefined, agent: undefined, activity: 'idle', sessionUsage: undefined, commands: mergeCommands([]), canRetry: false, recentModels: [], auth: undefined });
+    this.set({ engine, capabilities: this.engines.get(engine)!.capabilities, sessions: [], sessionId: undefined, messages: [], permissions: [], questions: [], providers: [], agents: [], mcp: [], model: undefined, effort: undefined, agent: undefined, activity: 'idle', sessionUsage: undefined, commands: mergeCommands([]), canRetry: false, recentModels: [], auth: undefined });
     this.stopSignInWait();
     await this.host.state.update('engine', engine);
     await this.activate();
@@ -574,9 +576,26 @@ export class ChatController {
   async setModel(model: ModelRef): Promise<void> {
     const same = (m: ModelRef) => m.providerId === model.providerId && m.modelId === model.modelId;
     const recentModels = [model, ...this.state.recentModels.filter((m) => !same(m))].slice(0, MAX_RECENT_MODELS);
-    this.set({ model, recentModels });
+    // The effort level is kept per engine; a model without that level falls back to its own default.
+    this.set({ model, recentModels, effort: resolveEffort(this.host.state.get<string>(`effort.${this.state.engine}`), findModel(this.state.providers, model)) });
     await this.host.state.update(`model.${this.state.engine}`, model);
     await this.host.state.update(`recentModels.${this.state.engine}`, recentModels);
+  }
+
+  /** The model the chat is set to, with what its engine reports about it. */
+  private currentModel(): ModelInfo | undefined {
+    return findModel(this.state.providers, this.state.model);
+  }
+
+  /** Choose how hard the model thinks; `undefined` goes back to the model's own default. */
+  async setEffort(effort: string | undefined): Promise<void> {
+    const model = this.currentModel();
+    if (effort !== undefined && !model?.efforts?.some((e) => e.id === effort)) {
+      this.notify('warn', model?.efforts?.length ? `${model.name} has no "${effort}" effort level. It has: ${model.efforts.map((e) => effortLabel(e.id)).join(', ')}.` : NO_EFFORT);
+      return;
+    }
+    this.set({ effort });
+    await this.host.state.update(`effort.${this.state.engine}`, effort);
   }
 
   async pickModel(): Promise<void> {
@@ -729,7 +748,7 @@ export class ChatController {
     }
     const sessionId = await this.ensureSession();
     if (!sessionId) return;
-    const input = { text, attachments: this.state.attachments, model: this.state.model, agent: this.state.agent };
+    const input: PromptInput = { text, attachments: this.state.attachments, model: this.state.model, agent: this.state.agent, effort: resolveEffort(this.state.effort, this.currentModel()) };
     this.stopRequested = false;
     this.set({ attachments: [], activity: 'busy', activityDetail: undefined, canRetry: false });
     try {
@@ -818,6 +837,22 @@ export class ChatController {
         if (!match) return this.notify('warn', `No model matches "${args}".`);
         await this.setModel({ providerId: match.providerId, modelId: match.modelId });
         return this.notify('info', `Model: ${match.name}`);
+      }
+      case 'effort': {
+        const model = this.currentModel();
+        const levels = model?.efforts ?? [];
+        if (levels.length === 0) return this.notify('info', NO_EFFORT);
+        const names = levels.map((e) => effortLabel(e.id).toLowerCase()).join(', ');
+        const current = this.state.effort ? effortLabel(this.state.effort) : `default${model?.defaultEffort ? ` (${effortLabel(model.defaultEffort)})` : ''}`;
+        if (!args) return this.notify('info', `Effort for ${model!.name}: ${current}. Levels: ${names}. Set one with /effort <level>; /effort default goes back to the model's own.`);
+        if (/^(default|auto|reset)$/i.test(args)) {
+          await this.setEffort(undefined);
+          return this.notify('info', `Effort: the model's default${model?.defaultEffort ? ` (${effortLabel(model.defaultEffort)})` : ''}.`);
+        }
+        const match = matchEffort(args, levels);
+        if (!match) return this.notify('warn', `${model!.name} has no "${args}" effort level. It has: ${names}.`);
+        await this.setEffort(match.id);
+        return this.notify('info', `Effort: ${effortLabel(match.id)}${isCostlyEffort(match.id) ? '. This level uses your limits much faster.' : ''}`);
       }
       case 'agent': {
         if (!caps.agents || this.state.agents.length === 0) return unsupported();
@@ -1398,6 +1433,8 @@ export class ChatController {
         return this.setEngine(msg.engine);
       case 'setModel':
         return this.setModel(msg.model);
+      case 'setEffort':
+        return this.setEffort(msg.effort ?? undefined);
       case 'setAgent':
         return this.setAgent(msg.agent);
       case 'pickFiles':
@@ -1538,6 +1575,13 @@ function avatarStyle(value: string): AvatarStyle {
 }
 
 const MAX_RECENT_MODELS = 5;
+
+const NO_EFFORT = 'This model has no effort setting. For a model that has one, an effort button appears next to the model name.';
+
+function findModel(providers: ProviderInfo[], ref: ModelRef | undefined): ModelInfo | undefined {
+  if (!ref) return undefined;
+  return providers.find((p) => p.id === ref.providerId)?.models.find((m) => m.modelId === ref.modelId);
+}
 
 function clampZoom(value: number): number {
   const n = Number.isFinite(value) ? value : 1;

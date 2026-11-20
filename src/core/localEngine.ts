@@ -8,6 +8,7 @@ import { LocalSessionStore } from './localSessions';
 import type { StoredSession } from './localSessions';
 import { truncate } from './slashCommands';
 import { estimateCost } from './usageLedger';
+import { QUESTIONS_SKIPPED, answersAsText, parseQuestions } from '../shared/questions';
 import { addUsage, approvalMode, emptyUsage } from '../shared/types';
 import type {
   AgentInfo,
@@ -23,6 +24,7 @@ import type {
   PermissionRequest,
   PromptInput,
   ProviderInfo,
+  QuestionItem,
   SessionActivity,
   SessionInfo,
   SlashCommand,
@@ -397,6 +399,49 @@ export abstract class LocalEngine implements Engine {
 
   private cancelPermissions(sessionId: string): void {
     for (const p of [...this.pendingPermissions.values()]) if (p.sessionId === sessionId) p.resolve('reject');
+  }
+
+  /* -------------------------------------------------------------- questions */
+
+  private pendingQuestions = new Map<string, { sessionId: string; resolve: (answers: string[][] | null) => void }>();
+
+  /**
+   * Show the model's questions in the chat and wait for the answers, one list of chosen or
+   * typed answers per question. Resolves to `null` when the user skips them or the turn stops.
+   * Unlike a permission this is never answered automatically, in Auto mode either.
+   */
+  protected askQuestions(sessionId: string, questions: QuestionItem[], signal: AbortSignal): Promise<string[][] | null> {
+    if (signal.aborted || questions.length === 0) return Promise.resolve(null);
+    const id = newId('que');
+    return new Promise<string[][] | null>((resolve) => {
+      const done = (answers: string[][] | null) => {
+        if (!this.pendingQuestions.delete(id)) return;
+        signal.removeEventListener('abort', onAbort);
+        this.emit({ type: 'question.resolved', sessionId, requestId: id });
+        resolve(answers);
+      };
+      const onAbort = () => done(null);
+      this.pendingQuestions.set(id, { sessionId, resolve: done });
+      signal.addEventListener('abort', onAbort, { once: true });
+      this.emit({ type: 'question.asked', request: { id, sessionId, questions } });
+    });
+  }
+
+  async replyQuestion(_sessionId: string, requestId: string, answers: string[][] | null): Promise<void> {
+    this.pendingQuestions.get(requestId)?.resolve(answers);
+  }
+
+  /** Whether models on engines without a question tool of their own are offered `ask_user`. */
+  protected offersAskUser(): boolean {
+    return this.ctx.config<boolean>('chat.askQuestions', true) !== false;
+  }
+
+  /** Run a call of the built-in `ask_user` tool: what the model reads back as the tool's result. */
+  protected async runAskUser(sessionId: string, input: unknown, signal: AbortSignal): Promise<{ text: string; isError: boolean }> {
+    const questions = parseQuestions(input);
+    if (questions.length === 0) return { text: 'ask_user needs "questions": a list with at least one { "question": "..." }.', isError: true };
+    const answers = await this.askQuestions(sessionId, questions, signal);
+    return { text: answers ? answersAsText(questions, answers) : QUESTIONS_SKIPPED, isError: false };
   }
 }
 

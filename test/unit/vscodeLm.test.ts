@@ -128,7 +128,8 @@ describe('VS Code LM engine (Copilot path) with a fake vscode.lm', () => {
     expect(String(second[0].content)).toContain('Prefer TypeScript.');
     expect(String(second[0].content)).toContain('Workspace folder: /work/app');
     expect(model.requests[0].options.justification).toMatch(/OpenCode Hub/);
-    expect(model.requests[0].options.tools).toBeUndefined();
+    // No MCP servers: the only tool offered is the one for asking you questions.
+    expect(model.requests[0].options.tools!.map((t) => t.name)).toEqual(['ask_user']);
     ctx.cleanup();
   });
 
@@ -169,11 +170,71 @@ describe('VS Code LM engine (Copilot path) with a fake vscode.lm', () => {
       { type: 'tool', tool: 'srv › lookup', status: 'completed', output: 'tool says 42' },
       { type: 'text', text: 'It is 42.' },
     ]);
-    expect(model.requests[0].options.tools).toEqual([{ name: 'srv__lookup', description: 'Look something up', inputSchema: { type: 'object' } }]);
+    expect(model.requests[0].options.tools![0]).toEqual({ name: 'srv__lookup', description: 'Look something up', inputSchema: { type: 'object' } });
+    expect(model.requests[0].options.tools!.map((t) => t.name)).toEqual(['srv__lookup', 'ask_user']);
     // Second request carries the tool call and its result.
     const followUp = model.requests[1].messages;
     expect(followUp.at(-2)!.content).toEqual([new TextPart('Checking. '), new ToolCallPart('call_1', 'srv__lookup', { q: 'answer' })]);
     expect(followUp.at(-1)!.content).toEqual([new ToolResultPart('call_1', [new TextPart('tool says 42')])]);
+    ctx.cleanup();
+  });
+
+  it('shows the model\'s questions in the chat and gives it the answers', async () => {
+    const ask = { questions: [{ question: 'Which test runner?', header: 'Runner', options: [{ label: 'vitest' }, { label: 'jest' }] }] };
+    const model = fakeModel((n) => (n === 1 ? [new ToolCallPart('call_q', 'ask_user', ask)] : [new TextPart('Using mocha.')]));
+    const { engine, ctx } = makeEngine([model]);
+    await engine.start();
+    const rec = record(engine);
+    const session = await engine.createSession();
+    const asked = rec.waitFor('question.asked');
+    await engine.sendPrompt(session.id, { text: 'set up tests', attachments: [], model: { providerId: 'copilot', modelId: 'gpt-x' } });
+    const { request } = await asked;
+    expect(request.questions).toEqual([{ question: 'Which test runner?', header: 'Runner', options: [{ label: 'vitest' }, { label: 'jest' }] }]);
+    await engine.replyQuestion(session.id, request.id, [['mocha']]);
+    await rec.waitIdle(session.id);
+    expect(rec.messages(session.id)[1].parts).toMatchObject([
+      { type: 'tool', tool: 'Question', status: 'completed', output: 'Q: Which test runner?\nA: mocha' },
+      { type: 'text', text: 'Using mocha.' },
+    ]);
+    expect(model.requests[1].messages.at(-1)!.content).toEqual([new ToolResultPart('call_q', [new TextPart('Q: Which test runner?\nA: mocha')])]);
+    ctx.cleanup();
+  });
+
+  it('sends the message again without the question tool when a model fails with it, and remembers', async () => {
+    const model = fakeModel(() => [new TextPart('Hi.')]);
+    const plain = model.sendRequest;
+    model.sendRequest = async (messages, options) => {
+      if (options.tools?.length) {
+        model.requests.push({ messages, options });
+        throw new Error('This model does not support tool calling');
+      }
+      return plain(messages, options);
+    };
+    const { engine, ctx } = makeEngine([model]);
+    await engine.start();
+    const rec = record(engine);
+    const session = await engine.createSession();
+    const ref = { providerId: 'copilot', modelId: 'gpt-x' };
+    await engine.sendPrompt(session.id, { text: 'hi', attachments: [], model: ref });
+    await rec.waitIdle(session.id);
+    expect(rec.messages(session.id)[1].error).toBeUndefined();
+    expect(rec.messages(session.id)[1].parts).toMatchObject([{ type: 'text', text: 'Hi.' }]);
+    await engine.sendPrompt(session.id, { text: 'hi again', attachments: [], model: ref });
+    await rec.waitIdle(session.id);
+    expect(model.requests.map((r) => !!r.options.tools)).toEqual([true, false, false]);
+    ctx.cleanup();
+  });
+
+  it('does not offer the question tool when the setting is off', async () => {
+    const model = fakeModel(() => [new TextPart('Hi.')]);
+    const { engine, ctx } = makeEngine([model]);
+    ctx.settings['chat.askQuestions'] = false;
+    await engine.start();
+    const rec = record(engine);
+    const session = await engine.createSession();
+    await engine.sendPrompt(session.id, { text: 'hi', attachments: [], model: { providerId: 'copilot', modelId: 'gpt-x' } });
+    await rec.waitIdle(session.id);
+    expect(model.requests[0].options.tools).toBeUndefined();
     ctx.cleanup();
   });
 

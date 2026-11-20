@@ -36,6 +36,7 @@ export const base = {
     { id: 'ollama', name: 'Ollama (local)', connected: true, models: [{ providerId: 'ollama', modelId: 'llama3.3:70b', name: 'llama3.3:70b' }] },
   ],
   model: { providerId: 'anthropic', modelId: 'claude-sonnet-5-5' },
+  effort: undefined,
   agents: [{ name: 'build', description: 'The default agent.' }, { name: 'plan', description: 'Plan mode. Disallows all edit tools.' }],
   agent: 'build',
   commands,

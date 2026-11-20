@@ -8,7 +8,7 @@ import { listPrice } from '../../core/listPrices';
 import type { Pricing } from '../../core/listPrices';
 import { findExecutable, runCapture, terminalCommand } from '../../core/process';
 import type { AuthMode, AuthStatus, EngineCapabilities, McpServerInfo, ModelInfo, ModelRef, ProviderInfo } from '../../shared/types';
-import { codexModels } from './modelDiscovery';
+import { codexEfforts, codexModels } from './modelDiscovery';
 import { apiKeySecret, authMode, codexEnv, parseCodexLoginStatus, shellExe } from './auth';
 import { CodexStreamTranslator } from './codexStream';
 import { StateFile, imageBase64, promptForAgent, runJsonl } from './common';
@@ -111,7 +111,7 @@ export class CodexEngine extends LocalEngine {
       for (const m of list ?? []) {
         const id = m.model ?? m.id;
         if (!id || m.hidden || models.some((x) => x.modelId === id)) continue;
-        models.push({ providerId: 'codex', modelId: id, name: m.displayName ?? id, description: m.description, supportsImages: !m.inputModalities || m.inputModalities.includes('image'), supportsTools: true });
+        models.push({ providerId: 'codex', modelId: id, name: m.displayName ?? id, description: m.description, supportsImages: !m.inputModalities || m.inputModalities.includes('image'), supportsTools: true, ...codexEfforts(m) });
         if (m.isDefault) {
           defaultName = m.displayName ?? id;
           this.defaultModelId = id;
@@ -146,7 +146,9 @@ export class CodexEngine extends LocalEngine {
     const [{ models: found, defaultName }, configured] = await Promise.all([this.accountModels(), this.configuredModel()]);
     const configuredName = configured ? found.find((m) => m.modelId === configured)?.name ?? configured : undefined;
     const current = configuredName ?? defaultName;
-    const models: ModelInfo[] = [{ providerId: 'codex', modelId: 'default', name: current ? `Default (${current})` : 'Default (from ~/.codex/config.toml)', description: configured ? 'The model set in ~/.codex/config.toml' : 'The recommended model for your plan', supportsImages: true, supportsTools: true }, ...found];
+    // "Default" runs the configured (or the plan's) model, so it has that model's effort levels.
+    const behindDefault = found.find((m) => m.modelId === (configured ?? this.defaultModelId));
+    const models: ModelInfo[] = [{ providerId: 'codex', modelId: 'default', name: current ? `Default (${current})` : 'Default (from ~/.codex/config.toml)', description: configured ? 'The model set in ~/.codex/config.toml' : 'The recommended model for your plan', supportsImages: true, supportsTools: true, efforts: behindDefault?.efforts, defaultEffort: behindDefault?.defaultEffort }, ...found];
     for (const id of Array.isArray(extra) ? extra : []) {
       if (typeof id === 'string' && !models.some((m) => m.modelId === id)) models.push({ providerId: 'codex', modelId: id, name: id, supportsImages: true, supportsTools: true });
     }
@@ -196,6 +198,8 @@ export class CodexEngine extends LocalEngine {
     const sandbox = this.ctx.config<string>('codex.sandbox', 'workspace-write');
     args.push('-c', `sandbox_mode=${['read-only', 'workspace-write', 'danger-full-access'].includes(sandbox) ? sandbox : 'workspace-write'}`);
     if (input.model && input.model.modelId !== 'default') args.push('-m', input.model.modelId);
+    // A bare word, like the sandbox mode above. The levels come from Codex's own model list.
+    if (input.effort && /^[A-Za-z0-9_-]+$/.test(input.effort)) args.push('-c', `model_reasoning_effort=${input.effort}`);
     const state = await this.stateFile.read();
     // Explicit overrides both ways, so a server disabled in config.toml can be switched on from the UI.
     for (const s of await this.listMcp().catch(() => [])) {

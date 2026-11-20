@@ -230,6 +230,76 @@ describe.skipIf(!claudeBin)('Claude Code engine (real `claude` CLI + mock Anthro
     }
   });
 
+  it('sends the chosen effort level to the model', async () => {
+    const rec = record(engine);
+    const session = await engine.createSession();
+    const model = { providerId: 'claude-code', modelId: 'sonnet' };
+    const efforts = () => mock.log.filter((l) => l.path.includes('messages') && JSON.stringify(l.body.messages ?? '').includes('effort check')).map((l) => (l.body.output_config as { effort?: string } | undefined)?.effort);
+    await engine.sendPrompt(session.id, { text: 'effort check one', attachments: [], model, effort: 'low' });
+    await rec.waitIdle(session.id, 100_000);
+    expect(rec.messages(session.id)[1].error).toBeUndefined();
+    expect(efforts().at(-1)).toBe('low');
+    await engine.sendPrompt(session.id, { text: 'effort check two', attachments: [], model, effort: 'max' });
+    await rec.waitIdle(session.id, 100_000);
+    expect(efforts().at(-1)).toBe('max');
+    // Without a choice the flag is left out and the CLI's own default applies again.
+    await engine.sendPrompt(session.id, { text: 'effort check three', attachments: [], model });
+    await rec.waitIdle(session.id, 100_000);
+    expect(efforts()).toHaveLength(3);
+    expect(efforts().at(-1)).not.toBe('max');
+    // The levels offered in the picker are the ones the CLI lists for the model.
+    const listed = (await engine.listProviders())[0].models;
+    for (const m of listed.filter((x) => x.efforts)) expect(m.efforts!.map((e) => e.id)).toEqual(expect.arrayContaining(['low', 'high']));
+  });
+
+  it("shows Claude's questions in the chat and returns the answers, typed ones included", async () => {
+    const rec = record(engine);
+    const session = await engine.createSession();
+    const model = { providerId: 'claude-code', modelId: 'sonnet' };
+    const ask = { questions: [{ question: 'Which library?', header: 'Library', options: [{ label: 'React', description: 'r' }, { label: 'Vue', description: 'v' }], multiSelect: false }, { question: 'Which features?', header: 'Features', options: [{ label: 'Auth', description: 'a' }, { label: 'Billing', description: 'b' }], multiSelect: true }] };
+    const asked = rec.waitFor('question.asked', (e) => e.request.sessionId === session.id, 60_000);
+    await engine.sendPrompt(session.id, { text: `ask me [[tool!:AskUserQuestion ${JSON.stringify(ask)}]]`, attachments: [], model });
+    const { request } = await asked;
+    expect(request.questions).toEqual([
+      { question: 'Which library?', header: 'Library', options: [{ label: 'React', description: 'r' }, { label: 'Vue', description: 'v' }] },
+      { question: 'Which features?', header: 'Features', options: [{ label: 'Auth', description: 'a' }, { label: 'Billing', description: 'b' }], multiple: true },
+    ]);
+    // A question is not a permission: no approval card for it.
+    expect(rec.events.some((e) => e.type === 'permission.asked' && e.request.sessionId === session.id)).toBe(false);
+    await engine.replyQuestion(session.id, request.id, [['Svelte, the one I already use'], ['Auth', 'Billing']]);
+    await rec.waitIdle(session.id, 100_000);
+    const tool = rec.messages(session.id)[1].parts.find((p) => p.type === 'tool') as { tool: string; status: string; output: string };
+    expect(tool).toMatchObject({ tool: 'AskUserQuestion', status: 'completed' });
+    expect(tool.output).toContain('Svelte, the one I already use');
+    expect(tool.output).toContain('Auth, Billing');
+    expect(rec.events.some((e) => e.type === 'question.resolved' && e.requestId === request.id)).toBe(true);
+
+    // Skipping tells Claude to carry on without the answers.
+    const other = await engine.createSession();
+    const asked2 = rec.waitFor('question.asked', (e) => e.request.sessionId === other.id, 60_000);
+    await engine.sendPrompt(other.id, { text: `ask again [[tool!:AskUserQuestion ${JSON.stringify(ask)}]]`, attachments: [], model });
+    await engine.replyQuestion(other.id, (await asked2).request.id, null);
+    await rec.waitIdle(other.id, 100_000);
+    expect(JSON.stringify(rec.messages(other.id)[1].parts)).toContain('skipped the questions');
+  });
+
+  it('still shows questions when Claude Code permissions are bypassed', async () => {
+    ctx.settings['claudeCode.permissionMode'] = 'bypassPermissions';
+    try {
+      const rec = record(engine);
+      const session = await engine.createSession();
+      const ask = { questions: [{ question: 'Which library?', header: 'Library', options: [{ label: 'React', description: 'r' }, { label: 'Vue', description: 'v' }] }] };
+      const asked = rec.waitFor('question.asked', (e) => e.request.sessionId === session.id, 60_000);
+      await engine.sendPrompt(session.id, { text: `ask me [[tool!:AskUserQuestion ${JSON.stringify(ask)}]]`, attachments: [], model: { providerId: 'claude-code', modelId: 'sonnet' } });
+      await engine.replyQuestion(session.id, (await asked).request.id, [['Vue']]);
+      await rec.waitIdle(session.id, 100_000);
+      expect(JSON.stringify(rec.messages(session.id)[1].parts)).toContain('Vue');
+      expect(rec.events.some((e) => e.type === 'permission.asked')).toBe(false);
+    } finally {
+      ctx.settings['claudeCode.permissionMode'] = 'acceptEdits';
+    }
+  });
+
   it('lists MCP servers from .mcp.json and honours the toggle', async () => {
     expect((await engine.listMcp()).map((s) => [s.name, s.enabled, s.source])).toEqual([
       ['mockmcp', true, '.mcp.json'],
@@ -376,6 +446,24 @@ describe.skipIf(!codexBin)('Codex engine (real `codex` CLI + mock Responses API)
     expect(sent).toContain('compare these three');
     for (const p of paths) expect(sent).toContain(JSON.stringify(p).slice(1, -1));
     expect(sent).toContain('GAMMA_MARKER');
+  });
+
+  it('sends the chosen reasoning effort to the model, and lists the levels of each model', async () => {
+    const rec = record(engine);
+    const session = await engine.createSession();
+    const efforts = () => mock.log.filter((l) => l.path.includes('responses') && JSON.stringify(l.body.input ?? '').includes('effort check')).map((l) => (l.body.reasoning as { effort?: string } | undefined)?.effort);
+    await engine.sendPrompt(session.id, { text: 'effort check one', attachments: [], model: { providerId: 'codex', modelId: 'default' }, effort: 'high' });
+    await rec.waitIdle(session.id, 100_000);
+    expect(rec.messages(session.id)[1].error).toBeUndefined();
+    expect(efforts().at(-1)).toBe('high');
+    await engine.sendPrompt(session.id, { text: 'effort check two', attachments: [], model: { providerId: 'codex', modelId: 'default' }, effort: 'low' });
+    await rec.waitIdle(session.id, 100_000);
+    expect(efforts().at(-1)).toBe('low');
+    // Codex lists the levels per model; whatever it lists is what the picker offers.
+    for (const m of (await engine.listProviders())[0].models.filter((x) => x.efforts)) {
+      expect(m.efforts!.length).toBeGreaterThan(0);
+      if (m.defaultEffort) expect(m.efforts!.map((e) => e.id)).toContain(m.defaultEffort);
+    }
   });
 
   it('resumes the same Codex thread on the next turn', async () => {

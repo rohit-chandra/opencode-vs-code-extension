@@ -23,6 +23,7 @@ const EMPTY: ViewState = {
   activityDetail: undefined,
   providers: [],
   model: undefined,
+  effort: undefined,
   agents: [],
   agent: undefined,
   commands: [],

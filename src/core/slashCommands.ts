@@ -5,6 +5,7 @@ export const BUILTIN_COMMANDS: SlashCommand[] = [
   { name: 'new', description: 'Start a new session', source: 'builtin' },
   { name: 'sessions', description: 'Switch to another session', source: 'builtin' },
   { name: 'model', description: 'Choose the model', source: 'builtin', argumentHint: '[name]' },
+  { name: 'effort', description: 'How hard the model thinks: low, medium, high… (when the model has the setting)', source: 'builtin', argumentHint: '[level|default]' },
   { name: 'agent', description: 'Choose the agent', source: 'builtin', argumentHint: '[name]' },
   { name: 'engine', description: 'Switch engine (opencode, BYOK, Claude Code, Codex, Copilot)', source: 'builtin', argumentHint: '[name]' },
   { name: 'mcp', description: 'Show MCP servers and toggle them', source: 'builtin' },

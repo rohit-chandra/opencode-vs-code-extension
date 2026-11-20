@@ -1,10 +1,11 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks';
 import { filterCommands } from '../../../src/core/slashCommands';
+import { effortHint, effortLabel, effortShortLabel, isCostlyEffort } from '../../../src/shared/effort';
 import { providerBrand } from '../../../src/shared/providerColors';
 import type { ViewState } from '../../../src/shared/protocol';
 import { ENGINE_LABELS } from '../../../src/shared/types';
 import type { Attachment, EngineId, SlashCommand } from '../../../src/shared/types';
-import { IconChart, IconChevron, IconClip, IconClose, IconFile, IconImage, IconSend, IconShield, IconStop, IconZap, IconPlus } from '../icons';
+import { IconBrain, IconChart, IconCheck, IconChevron, IconClip, IconClose, IconFile, IconImage, IconSend, IconShield, IconStop, IconWarn, IconZap, IconPlus } from '../icons';
 import { compact, money, tokensAll, tokensIn, tokensOut } from '../format';
 import { send, store } from '../store';
 
@@ -53,7 +54,7 @@ export function Composer({ s, onOpenPanel }: { s: ViewState; onOpenPanel: (p: 'm
   const suggestFile = !!af && s.trusted && !s.attachments.some((a) => a.path === af.path && (af.selection ? a.range?.startLine === af.selection.startLine && a.range?.endLine === af.selection.endLine : !a.range));
   const [text, setText] = useState('');
   const [popup, setPopup] = useState<Popup>();
-  const [menu, setMenu] = useState<'engine' | 'agent' | 'approvals' | undefined>();
+  const [menu, setMenu] = useState<'engine' | 'effort' | 'agent' | 'approvals' | undefined>();
   const input = useRef<HTMLTextAreaElement>(null);
   const searchSeq = useRef(0);
   const busy = s.activity !== 'idle';
@@ -171,6 +172,12 @@ export function Composer({ s, onOpenPanel }: { s: ViewState; onOpenPanel: (p: 'm
 
   const engineStatus = s.engines.find((e) => e.engine === s.engine);
   const modelInfo = s.model && s.providers.flatMap((p) => p.models).find((m) => m.providerId === s.model!.providerId && m.modelId === s.model!.modelId);
+  // Thinking effort: shown only for models whose engine has such a setting.
+  const efforts = modelInfo?.efforts ?? [];
+  const effortId = s.effort ?? modelInfo?.defaultEffort;
+  const effortName = effortId ? effortLabel(effortId) : 'Effort';
+  // In a narrow side bar the short form leaves the room to the model's name.
+  const effortShort = effortId ? effortShortLabel(effortId) : '';
 
   return (
     <div class="composer">
@@ -292,6 +299,53 @@ export function Composer({ s, onOpenPanel }: { s: ViewState; onOpenPanel: (p: 'm
           <span class="pill-text">{modelInfo?.name ?? s.model?.modelId ?? 'Choose model'}</span>
           <IconChevron size={11} />
         </button>
+
+        {efforts.length > 0 && (
+          <span class="menu-anchor effort-anchor">
+            <button
+              type="button"
+              class={`pill effort ${s.effort && isCostlyEffort(s.effort) ? 'costly' : ''}`}
+              aria-haspopup="menu"
+              aria-expanded={menu === 'effort'}
+              title={`Effort: ${effortName}. How hard the model thinks before it answers`}
+              aria-label={`Effort: ${effortName}`}
+              onClick={() => setMenu(menu === 'effort' ? undefined : 'effort')}
+            >
+              <IconBrain size={12} />
+              <span class="pill-text effort-full">{effortName}</span>
+              <span class="pill-text effort-short">{effortShort}</span>
+            </button>
+            {menu === 'effort' && (
+              <div class="menu effort-menu" role="menu" aria-label="Effort">
+                <div class="menu-note">How hard the model thinks. Higher levels are more thorough, but slower, and use up your plan's limits (or tokens) faster.</div>
+                <button type="button" role="menuitemradio" aria-checked={!s.effort} class={`menu-item two-line ${!s.effort ? 'active' : ''}`} onClick={() => (setMenu(undefined), send({ type: 'setEffort', effort: null }))}>
+                  <span class="menu-check">{!s.effort && <IconCheck size={12} />}</span>
+                  <span class="menu-text">
+                    <span class="menu-label">Default</span>
+                    <span class="menu-desc">{modelInfo?.defaultEffort ? `${effortLabel(modelInfo.defaultEffort)}, the model's own setting` : "The model's own setting"}</span>
+                  </span>
+                </button>
+                {efforts.map((e) => (
+                  <button type="button" role="menuitemradio" aria-checked={s.effort === e.id} class={`menu-item two-line ${s.effort === e.id ? 'active' : ''}`} key={e.id} onClick={() => (setMenu(undefined), send({ type: 'setEffort', effort: e.id }))}>
+                    <span class="menu-check">{s.effort === e.id && <IconCheck size={12} />}</span>
+                    <span class="menu-text">
+                      <span class="menu-label">
+                        {effortLabel(e.id)}
+                        {e.id === modelInfo?.defaultEffort && <span class="menu-tag">default</span>}
+                      </span>
+                      {effortHint(e) && <span class="menu-desc">{effortHint(e)}</span>}
+                      {isCostlyEffort(e.id) && (
+                        <span class="menu-desc menu-warn">
+                          <IconWarn size={11} /> Uses your limits much faster
+                        </span>
+                      )}
+                    </span>
+                  </button>
+                ))}
+              </div>
+            )}
+          </span>
+        )}
 
         {s.agents.length > 0 && (
           <span class="menu-anchor">

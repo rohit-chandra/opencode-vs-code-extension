@@ -4,9 +4,10 @@ import { attachmentsAsText, resolveAttachment } from '../../core/attachments';
 import { LocalEngine } from '../../core/localEngine';
 import type { Turn } from '../../core/localEngine';
 import type { McpManager, McpTool } from '../../mcp/manager';
+import { ASK_USER_TOOL } from '../../shared/questions';
 import type { EngineCapabilities, McpServerInfo, ProviderInfo } from '../../shared/types';
 import { DEFAULT_SYSTEM_PROMPT } from '../direct/engine';
-import type { WireBlock, WireMessage } from '../direct/wire';
+import type { ToolSpec, WireBlock, WireMessage } from '../direct/wire';
 
 /** The slice of the `vscode` module this engine uses; injected so the engine can be tested without VS Code. */
 export type LmApi = Pick<typeof vscode, 'lm' | 'LanguageModelChatMessage' | 'LanguageModelTextPart' | 'LanguageModelToolCallPart' | 'LanguageModelToolResultPart' | 'CancellationTokenSource'>;
@@ -34,6 +35,8 @@ export class VscodeLmEngine extends LocalEngine {
   };
 
   private allowed = new Set<string>();
+  /** Models that failed when offered the question tool, in this window. */
+  private noTools = new Set<string>();
 
   constructor(ctx: EngineContext, private readonly vs: LmApi, private readonly mcp: McpManager) {
     super(ctx, 'vscode-lm');
@@ -105,8 +108,12 @@ export class VscodeLmEngine extends LocalEngine {
     if (resolved.some((r) => r.image)) assistant.notice('warn', 'Images are not supported by this engine and were skipped.');
     wire.push({ role: 'user', blocks: [{ type: 'text', text }] });
 
-    const tools = await this.mcp.tools().catch(() => [] as McpTool[]);
-    const byName = new Map(tools.map((t) => [t.name, t]));
+    const mcpTools = await this.mcp.tools().catch(() => [] as McpTool[]);
+    const byName = new Map(mcpTools.map((t) => [t.name, t]));
+    // The model may ask clarifying questions through a tool of ours, unless it turned out not to take tools.
+    const modelKey = `${input.model.providerId}/${input.model.modelId}`;
+    let askUser = this.offersAskUser() && !this.noTools.has(modelKey);
+    const offered = (): ToolSpec[] => (askUser ? [...mcpTools, ASK_USER_TOOL] : mcpTools);
     const system = [DEFAULT_SYSTEM_PROMPT, this.ctx.cwd() ? `Workspace folder: ${this.ctx.cwd()}` : '', this.ctx.config<string>('systemPrompt', '')].filter(Boolean).join('\n\n');
 
     const cts = new this.vs.CancellationTokenSource();
@@ -115,22 +122,39 @@ export class VscodeLmEngine extends LocalEngine {
     try {
       for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
         const messages = this.toLmMessages(system, wire);
-        const response = await model.sendRequest(
-          messages,
-          {
-            justification: 'OpenCode Hub sends your chat messages to the model you selected.',
-            tools: tools.length ? tools.map((t) => ({ name: t.name, description: t.description, inputSchema: t.inputSchema })) : undefined,
-          },
-          cts.token,
-        );
         let replyText = '';
         const calls: { id: string; name: string; input: object }[] = [];
-        for await (const part of response.stream) {
-          if (part instanceof this.vs.LanguageModelTextPart) {
-            replyText += part.value;
-            assistant.text(part.value);
-          } else if (part instanceof this.vs.LanguageModelToolCallPart) {
-            calls.push({ id: part.callId, name: part.name, input: part.input });
+        for (;;) {
+          let received = false;
+          try {
+            const tools = offered();
+            const response = await model.sendRequest(
+              messages,
+              {
+                justification: 'OpenCode Hub sends your chat messages to the model you selected.',
+                tools: tools.length ? tools.map((t) => ({ name: t.name, description: t.description, inputSchema: t.inputSchema })) : undefined,
+              },
+              cts.token,
+            );
+            for await (const part of response.stream) {
+              received = true;
+              if (part instanceof this.vs.LanguageModelTextPart) {
+                replyText += part.value;
+                assistant.text(part.value);
+              } else if (part instanceof this.vs.LanguageModelToolCallPart) {
+                calls.push({ id: part.callId, name: part.name, input: part.input });
+              }
+            }
+            break;
+          } catch (err) {
+            // A model that takes no tools fails the request when our question tool is the only one
+            // offered: send it again without, and remember that for the model.
+            // Consent, quota and "model gone" are about the account, not the tools: those go to the user as they are.
+            const code = (err as { code?: string } | null)?.code;
+            if (signal.aborted || received || !askUser || mcpTools.length > 0 || code === 'NoPermissions' || code === 'Blocked' || code === 'NotFound') throw err;
+            askUser = false;
+            this.noTools.add(modelKey);
+            this.ctx.log.info(`${modelKey} failed with the question tool offered; trying again without tools (${err instanceof Error ? err.message : String(err)})`);
           }
         }
         // The LM API reports no token usage, so these are estimates from the model's own tokenizer.
@@ -147,12 +171,20 @@ export class VscodeLmEngine extends LocalEngine {
         const results: WireBlock[] = [];
         for (const call of calls) {
           const tool = byName.get(call.name);
-          const label = tool ? `${tool.server} › ${tool.tool}` : call.name;
+          const asking = askUser && call.name === ASK_USER_TOOL.name;
+          const label = asking ? 'Question' : tool ? `${tool.server} › ${tool.tool}` : call.name;
           assistant.tool(call.id, { tool: label, status: 'pending', input: call.input });
           const done = (out: string, isError: boolean) => {
             assistant.tool(call.id, isError ? { status: 'error', error: out } : { status: 'completed', output: out });
             results.push({ type: 'tool_result', id: call.id, name: call.name, text: out, isError });
           };
+          if (asking) {
+            assistant.tool(call.id, { status: 'running' });
+            const answered = await this.runAskUser(session.info.id, call.input, signal);
+            if (signal.aborted) return;
+            done(answered.text, answered.isError);
+            continue;
+          }
           if (!tool) {
             done(`Unknown tool "${call.name}".`, true);
             continue;

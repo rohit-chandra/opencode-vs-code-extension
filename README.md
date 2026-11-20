@@ -23,8 +23,10 @@ Works on **Windows, macOS and Linux**, including remote windows (SSH, WSL, dev c
 | [Install](#install) | [Ask about your code](#ask-about-your-code) | [Sending a message](#what-happens-when-you-send-a-message) | [Development](#development) |
 | [Connect an engine](#step-4-connect-an-engine) | [Attachments](#attachments) | [Performance](#performance) | [Tests](#tests) |
 | [Where the chat lives](#where-the-chat-lives) | [Sessions](#sessions) | [Settings](#settings) | [Releasing and maintaining](#releasing-and-maintaining) |
-| [If something does not work](#if-something-does-not-work) | [Ask or Auto](#ask-or-auto) | [Security and privacy](#security-and-privacy) | [Licence](#licence) |
-|  | [MCP servers](#mcp-servers) | [Limits worth knowing](#limits-worth-knowing) |  |
+| [If something does not work](#if-something-does-not-work) | [Effort](#effort) | [Security and privacy](#security-and-privacy) | [Licence](#licence) |
+|  | [Ask or Auto](#ask-or-auto) | [Limits worth knowing](#limits-worth-knowing) |  |
+|  | [Questions from the agent](#questions-from-the-agent) |  |  |
+|  | [MCP servers](#mcp-servers) |  |  |
 |  | [Token usage and cost](#token-usage) |  |  |
 |  | [Oki, the companion](#oki-the-companion) |  |  |
 
@@ -92,10 +94,10 @@ Skip this step if Step 1 worked. Get the file one of these ways:
 Then install it: in the Extensions view, click the **…** menu, choose **Install from VSIX…** and select the file. Or run **Extensions: Install from VSIX…** from the Command Palette, or use a terminal:
 
 ```bash
-code --install-extension opencode-hub-0.5.1.vsix
+code --install-extension opencode-hub-0.6.0.vsix
 ```
 
-Use `cursor`, `codium` or `windsurf` in place of `code` for those editors. If `code` is not found on macOS, run *Shell Command: Install 'code' command in PATH* from the Command Palette first. On Windows, quote the path if it contains spaces: `code --install-extension "D:\Downloads\opencode-hub-0.5.1.vsix"`.
+Use `cursor`, `codium` or `windsurf` in place of `code` for those editors. If `code` is not found on macOS, run *Shell Command: Install 'code' command in PATH* from the Command Palette first. On Windows, quote the path if it contains spaces: `code --install-extension "D:\Downloads\opencode-hub-0.6.0.vsix"`.
 
 ### Step 3: Open the chat
 
@@ -247,6 +249,7 @@ Type `/` to see every command, filtered as you type. Commands defined by the eng
 | `/sessions` | Search and switch sessions, rename or delete them |
 | `/context [title]` | Bring another session into this chat as condensed context |
 | `/model [name]`, `/agent [name]`, `/engine [name]` | Change model, agent or engine |
+| `/effort [level\|default]` | How hard the model thinks (see [Effort](#effort)) |
 | `/mcp` | Show MCP servers with their status and a toggle each |
 | `/usage` | Token usage for this session and overall |
 | `/attach` | Attach files |
@@ -274,6 +277,22 @@ Output of `/help` and `/doctor` is a card with a close button; it is not part of
 
 - When a reply fails, or you stop it, a **Retry** button appears under it. It sends your last message again (attachments are not re-sent).
 - The model picker lists the models you used most recently for the current engine at the top, above the full list by provider.
+
+### Effort
+
+Models that can think harder or lighter get an effort button next to the model name. It opens the levels that model has, lightest first, each with a line on what it trades: for example **Low**, **Medium**, **High**, **Extra high** and **Max**. Higher levels give more thorough answers, take longer, and use up a plan's limits (or tokens) faster; the top level says so in the menu and tints the button. **Default** leaves the choice to the model.
+
+The levels are never guessed for an account: they are the ones the engine reports for the model you picked.
+
+| Engine | Where the levels come from | How the choice is sent |
+|---|---|---|
+| Claude Code | The CLI's model list for your account | `claude --effort <level>` |
+| Codex | The CLI's model list (with its own descriptions and default) | `model_reasoning_effort` |
+| opencode | The model's *variants* | The prompt's `variant` |
+| Direct BYOK | Low, medium and high for OpenAI-compatible APIs; low to max for Anthropic's | `reasoning_effort`, or `output_config.effort` |
+| Copilot | VS Code's model API has no such setting | No button |
+
+`/effort high` sets a level by name, `/effort default` clears it, and `/effort` alone shows what the model has. The choice is kept per engine; a model without that level uses its own default until you switch back. A BYOK endpoint does not say which of its models take the setting, so when one refuses a level the message is sent again without it and the chat says so once.
 
 ### Attachments
 
@@ -314,6 +333,19 @@ Switch with the button, `/auto` and `/ask`, **Switch to Auto** on any approval c
 | Claude Code | Claude Code asks the chat before each tool its permission mode does not already allow (`acceptEdits` allows file edits) | Approves every tool call |
 | Direct BYOK, Copilot | Asks before each MCP tool call | Runs MCP tools without asking |
 | Codex | Codex never stops to ask; `opencodeHub.codex.sandbox` limits what it can do | Same |
+
+### Questions from the agent
+
+When a request is vague, or a decision is yours to make, the model can ask before it goes on. Its questions appear above the message box **one at a time**: pick one of the options (several where the question allows it), or **type an answer of your own** in the box under them. **Next** moves on, **Back** changes an earlier answer, and nothing is sent until the last question is answered. **Skip** tells the model to carry on with its own judgement.
+
+Questions are not approvals, so they are shown in Auto mode too.
+
+| Engine | How the model asks |
+|---|---|
+| opencode | opencode's question tool |
+| Claude Code | Claude's `AskUserQuestion` tool, in every permission mode |
+| Direct BYOK, Copilot | A small `ask_user` tool the extension offers to the model. `opencodeHub.chat.askQuestions` turns it off; a model that takes no tools simply goes without it |
+| Codex | No question tool in this mode: it asks in plain text and you answer in the chat |
 
 ### MCP servers
 
@@ -465,6 +497,7 @@ Measured with the UI test suite (headless Chrome, software rendering): a reply s
 | `opencodeHub.avatar.enabled`, `.style` | `true`, `buddy` | Companion on/off, and `buddy` (the character) or `dots` |
 | `opencodeHub.chat.zoom` | `1` | Text size of the chat, from `0.8` to `1.6` |
 | `opencodeHub.chat.providerColors` | `true` | Colour the chat by the model's maker (Claude orange, OpenAI green, …) |
+| `opencodeHub.chat.askQuestions` | `true` | Direct BYOK and Copilot: let the model ask you clarifying questions through the chat |
 | `opencodeHub.usage.statusBar` | `true` | Session tokens in the status bar |
 | `opencodeHub.usage.estimateCost` | `true` | Estimate cost from list prices when the engine reports none |
 | `opencodeHub.direct.maxContextTokens` | `0` | Direct BYOK: cap on conversation history per request. `0` trims only when the provider says the context window is full |

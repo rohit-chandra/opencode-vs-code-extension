@@ -38,6 +38,8 @@ export interface ViewState {
   activityDetail: string | undefined;
   providers: ProviderInfo[];
   model: ModelRef | undefined;
+  /** Thinking effort chosen for the model (one of its `efforts`); undefined means the model's default. */
+  effort: string | undefined;
   agents: AgentInfo[];
   agent: string | undefined;
   commands: SlashCommand[];
@@ -99,6 +101,7 @@ export type WebviewToHost =
   | { type: 'renameSession'; sessionId: string; title: string }
   | { type: 'setEngine'; engine: EngineId }
   | { type: 'setModel'; model: ModelRef }
+  | { type: 'setEffort'; effort: string | null }
   | { type: 'setAgent'; agent: string }
   | { type: 'pickFiles' }
   | { type: 'addAttachment'; attachment: Attachment }

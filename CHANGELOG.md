@@ -1,12 +1,12 @@
 # Changelog
 
-## Unreleased
+## v0.6.1
 
 ### Changed
 
 - **The model list is there the moment you pick an engine.** Listing models means starting a CLI and asking your account (Claude Code, Codex), booting opencode's server, or calling a BYOK endpoint, which takes from a fraction of a second to several seconds. The chat now keeps the last list of each engine and shows it, with your selected model, agent and effort level, as soon as the engine is selected or VS Code starts; the fresh list is fetched in the background as before and replaces it when it arrives. Only the first use of an engine in a workspace still waits, and the picker says **Loading models…** while it does. The saved copy holds what the picker shows (names and capabilities), never keys or tokens, and no engine is contacted before you pick it.
 
-## 0.6.0
+## v0.6.0
 
 ### Added
 
@@ -19,7 +19,7 @@
 
 - Direct BYOK: when a model refuses an effort level, the message is sent again without it and the chat says so once, instead of failing.
 
-## 0.5.1
+## v0.5.1
 
 ### Fixed
 
@@ -32,7 +32,7 @@
 
 - **Every Claude model can be picked in Claude Code.** After the list the CLI reports for your account come the model families it left out (Fable, Opus, Sonnet, Haiku) and **Opus Plan Mode**. **Add a model by name…** in the model picker (Claude Code and Codex) adds any other model the CLI accepts, such as an earlier version.
 
-## 0.5.0
+## v0.5.0
 
 ### Added
 
@@ -69,7 +69,7 @@
 - `npm run stats` prints installs and downloads from the Marketplace, Open VSX and GitHub releases.
 - A Claude agent workflow (`.github/workflows/claude.yml`) fixes issues labelled `claude-fix` and opens a pull request; issue forms, a pull request template, `SECURITY.md` and `CLAUDE.md` were added.
 
-## 0.4.0
+## v0.4.0
 
 ### Added
 
@@ -93,7 +93,7 @@
 - The token count moved from the top bar's usage icon to the session pill under the message box.
 - In a typical side bar width, the Ask label and the session cost collapse into their tooltips so the model name keeps its room. Auto always stays labelled.
 
-## 0.3.0
+## v0.3.0
 
 ### Added
 
@@ -108,7 +108,7 @@
 - In subscription mode, `ANTHROPIC_API_KEY` / `ANTHROPIC_AUTH_TOKEN` (Claude Code) and `CODEX_API_KEY` (Codex) are hidden from the CLI, so a key set in your shell for other tools can no longer silently switch you to per-token billing.
 - Messages are not sent while Claude Code or Codex is signed out; the chat asks you to sign in instead of failing.
 
-## 0.2.0
+## v0.2.0
 
 ### Added
 
@@ -135,7 +135,7 @@
 
 - A turn that an engine splits into several messages (a tool call, then the answer) is now judged as one turn by the companion.
 
-## 0.1.0
+## v0.1.0
 
 First release.
 

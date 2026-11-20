@@ -53,4 +53,12 @@ Run lint, typecheck and unit tests before every commit. Run `test:e2e` after tou
 
 ## Changelog and versions
 
-User-visible changes get a line in `CHANGELOG.md` under the topmost section. The maintainer bumps `version` in `package.json` and tags releases; do not do either in a fix.
+Releases are automatic: when CI is green on `main` and `version` in `package.json` has no release yet, the **Release** workflow tags `vX.Y.Z`, builds the `.vsix`, creates the GitHub release from the changelog section and publishes to the stores. Nobody tags or drafts releases by hand.
+
+So a user-visible change carries its own version:
+
+- Raise the version with `npm version patch --no-git-tag-version` (a fix or a small change) or `minor` (a new feature). That edits `package.json` and `package-lock.json`.
+- Put the notes under a `## vX.Y.Z` heading at the top of `CHANGELOG.md`, with the `v`. If the topmost section is a version that is not released yet (no tag), add to it instead of raising the version again.
+- A unit test fails when the topmost changelog heading and `package.json` disagree.
+
+Changes users do not see (tests, CI, docs for contributors) need neither a version nor a changelog line, and release nothing.

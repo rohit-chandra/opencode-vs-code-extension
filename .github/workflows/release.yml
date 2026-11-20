@@ -1,70 +1,173 @@
 name: Release
 
-# Push a tag like v0.2.0 (matching "version" in package.json), or publish a release with
-# that tag from the Releases page, to build, test and attach the .vsix.
+# Releases are automatic. When CI is green on main and the "version" in package.json has no
+# release yet, this workflow tags vX.Y.Z on that commit, builds the .vsix, creates the GitHub
+# release from the changelog section and publishes to the stores. A push that does not change
+# the version releases nothing.
+#
+# The other triggers are for repairs and old habits:
+#   Run workflow (on main)   build and attach whatever a failed run left missing, or publish
+#                            an existing release to a store that was set up later
+#   a tag, or a release      still work when the tag is "v" + the version on that commit
+#   made by hand
 on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
   push:
     tags: ['v*.*.*']
   release:
     types: [published]
+  workflow_dispatch:
+    inputs:
+      publish_again:
+        description: Publish again (send a release that already exists to the stores)
+        type: boolean
+        default: false
 
 permissions:
   contents: write
 
-# Publishing from the Releases page can fire both the tag push and the release event.
-# Run them one after the other; the second only re-uploads the same files.
+# One release at a time. A release made from the Releases page fires both the tag push and
+# the release event; the second run finds the files attached and stops.
 concurrency:
-  group: release-${{ github.ref_name }}
+  group: release
   cancel-in-progress: false
 
 jobs:
   release:
+    # After CI: only a green run for a push to main (not a pull request, not a manual run).
+    if: >-
+      github.event_name != 'workflow_run' ||
+      (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push' && github.event.workflow_run.head_branch == 'main')
     runs-on: ubuntu-latest
+    outputs:
+      publish: ${{ steps.plan.outputs.publish }}
+      version: ${{ steps.plan.outputs.version }}
     steps:
       - uses: actions/checkout@v7
+        with:
+          # After CI: exactly the commit CI tested. Otherwise the tag, or main.
+          ref: ${{ github.event.workflow_run.head_sha || github.ref }}
       - uses: actions/setup-node@v7
         with:
           node-version: '22'
           cache: npm
-      - name: Check that the tag matches package.json
+      - name: Decide what to do
+        id: plan
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PUBLISH_AGAIN: ${{ inputs.publish_again }}
         run: |
           version="$(node -p "require('./package.json').version")"
-          if [ "v$version" != "$GITHUB_REF_NAME" ]; then
-            echo "::error::Tag $GITHUB_REF_NAME does not match package.json version $version"
-            exit 1
+          tag="v$version"
+          sha="$(git rev-parse HEAD)"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+          say() { echo "$1" >> "$GITHUB_STEP_SUMMARY"; echo "$1"; }
+
+          # A tag or a release made by hand has to agree with package.json on that commit.
+          if [ "$GITHUB_EVENT_NAME" = "push" ] || [ "$GITHUB_EVENT_NAME" = "release" ]; then
+            if [ "$GITHUB_REF_NAME" != "$tag" ]; then
+              echo "::error::Tag $GITHUB_REF_NAME does not match \"version\": \"$version\" in package.json on that commit. Releases are automatic now: set the version in package.json on main and this workflow creates $tag itself. Delete the tag and release $GITHUB_REF_NAME if they are not wanted."
+              exit 1
+            fi
           fi
-          echo "VERSION=$version" >> "$GITHUB_ENV"
+
+          # Is this version out already? "Out" means a release with the .vsix attached.
+          # (gh prints the error body on a 404, so go by its exit code, not by its output.)
+          exists=false
+          assets=""
+          if gh api "repos/$GITHUB_REPOSITORY/releases/tags/$tag" > "$RUNNER_TEMP/release.json" 2>/dev/null; then
+            exists=true
+            assets="$(jq -r '[.assets[].name] | join(" ")' "$RUNNER_TEMP/release.json")"
+          fi
+          case " $assets " in
+            *".vsix "*)
+              echo "build=false" >> "$GITHUB_OUTPUT"
+              if [ "$PUBLISH_AGAIN" = "true" ]; then
+                echo "publish=true" >> "$GITHUB_OUTPUT"
+                say "$tag is already released. Publishing its .vsix to the stores again."
+              else
+                echo "publish=false" >> "$GITHUB_OUTPUT"
+                say "Nothing to release: $tag is already out. A new release happens when \"version\" in package.json changes."
+              fi
+              ;;
+            *)
+              echo "build=true" >> "$GITHUB_OUTPUT"
+              echo "publish=true" >> "$GITHUB_OUTPUT"
+              if [ "$exists" = "true" ]; then
+                echo "release_exists=true" >> "$GITHUB_OUTPUT"
+                say "Release $tag exists without a .vsix. Building it from ${sha:0:7} and attaching it."
+              else
+                echo "release_exists=false" >> "$GITHUB_OUTPUT"
+                say "Releasing $tag from ${sha:0:7}."
+              fi
+              ;;
+          esac
+
       - run: npm ci
-      - run: npm run lint
-      - run: npm run typecheck
-      - run: npm test
-      - name: End-to-end tests with the real CLIs
+        if: steps.plan.outputs.build == 'true'
+      # After CI the same commit has just passed every test on three systems. A tag, a release
+      # or a manual run has no such guarantee, so the tests run here.
+      - name: Tests (only when CI did not just run them for this commit)
+        if: steps.plan.outputs.build == 'true' && github.event_name != 'workflow_run'
         run: |
+          npm run lint
+          npm run typecheck
+          npm test
           npm install -g opencode-ai @anthropic-ai/claude-code @openai/codex
           npm run test:e2e
       - name: Package
+        if: steps.plan.outputs.build == 'true'
+        env:
+          VERSION: ${{ steps.plan.outputs.version }}
         run: |
           npm run build:prod
           npx vsce package --no-dependencies -o "opencode-hub-$VERSION.vsix"
           sha256sum "opencode-hub-$VERSION.vsix" > "opencode-hub-$VERSION.vsix.sha256"
       - name: Release notes from the changelog
+        if: steps.plan.outputs.build == 'true'
+        env:
+          VERSION: ${{ steps.plan.outputs.version }}
         run: |
-          awk -v v="## $VERSION" '$0 == v {found=1; next} found && /^## / {exit} found {print}' CHANGELOG.md > notes.md
-          test -s notes.md || echo "Release $VERSION" > notes.md
+          # The section headed "## vX.Y.Z" (older sections were headed "## X.Y.Z").
+          awk -v a="## v$VERSION" -v b="## $VERSION" '$0 == a || $0 == b {found=1; next} found && /^## / {exit} found {print}' CHANGELOG.md > notes.md
+          grep -q '[^[:space:]]' notes.md || echo "Release v$VERSION" > notes.md
       - name: Create the GitHub release
+        if: steps.plan.outputs.build == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.plan.outputs.version }}
+          TAG: ${{ steps.plan.outputs.tag }}
+          SHA: ${{ steps.plan.outputs.sha }}
+          RELEASE_EXISTS: ${{ steps.plan.outputs.release_exists }}
         run: |
-          # The release may already exist when the tag was created from the Releases page.
-          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
-            gh release upload "$GITHUB_REF_NAME" "opencode-hub-$VERSION.vsix" "opencode-hub-$VERSION.vsix.sha256" --clobber
+          if [ "$RELEASE_EXISTS" = "true" ]; then
+            gh release upload "$TAG" "opencode-hub-$VERSION.vsix" "opencode-hub-$VERSION.vsix.sha256" --clobber
+            # A release made by hand usually has no notes; give it the changelog section.
+            body="$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/$TAG" --jq '.body // ""')"
+            if [ -z "$(printf '%s' "$body" | tr -d '[:space:]')" ]; then
+              gh release edit "$TAG" --notes-file notes.md
+            fi
           else
-            gh release create "$GITHUB_REF_NAME" "opencode-hub-$VERSION.vsix" "opencode-hub-$VERSION.vsix.sha256" --title "OpenCode Hub $VERSION" --notes-file notes.md
+            # Creates the tag on the commit that was tested, when it does not exist yet.
+            gh release create "$TAG" "opencode-hub-$VERSION.vsix" "opencode-hub-$VERSION.vsix.sha256" --target "$SHA" --title "OpenCode Hub v$VERSION" --notes-file notes.md
           fi
+          echo "Released: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/releases/tag/$TAG" >> "$GITHUB_STEP_SUMMARY"
+      - name: Fetch the .vsix of the existing release
+        if: steps.plan.outputs.build != 'true' && steps.plan.outputs.publish == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.plan.outputs.tag }}
+        run: gh release download "$TAG" --pattern '*.vsix'
       - uses: actions/upload-artifact@v7
+        if: steps.plan.outputs.publish == 'true'
         with:
           name: vsix
-          path: opencode-hub-${{ env.VERSION }}.vsix
+          path: opencode-hub-${{ steps.plan.outputs.version }}.vsix
           if-no-files-found: error
 
   publish:
@@ -73,6 +176,7 @@ jobs:
     #                              (Trusted Publishing: no stored token), or secret VSCE_PAT
     #   Open VSX                   secret OVSX_PAT
     needs: release
+    if: needs.release.outputs.publish == 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: read

@@ -94,10 +94,10 @@ Skip this step if Step 1 worked. Get the file one of these ways:
 Then install it: in the Extensions view, click the **…** menu, choose **Install from VSIX…** and select the file. Or run **Extensions: Install from VSIX…** from the Command Palette, or use a terminal:
 
 ```bash
-code --install-extension opencode-hub-0.6.0.vsix
+code --install-extension opencode-hub-0.6.1.vsix
 ```
 
-Use `cursor`, `codium` or `windsurf` in place of `code` for those editors. If `code` is not found on macOS, run *Shell Command: Install 'code' command in PATH* from the Command Palette first. On Windows, quote the path if it contains spaces: `code --install-extension "D:\Downloads\opencode-hub-0.6.0.vsix"`.
+Use `cursor`, `codium` or `windsurf` in place of `code` for those editors. If `code` is not found on macOS, run *Shell Command: Install 'code' command in PATH* from the Command Palette first. On Windows, quote the path if it contains spaces: `code --install-extension "D:\Downloads\opencode-hub-0.6.1.vsix"`.
 
 ### Step 3: Open the chat
 

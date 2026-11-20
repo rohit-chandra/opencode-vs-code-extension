@@ -2,7 +2,7 @@
   "name": "opencode-hub",
   "displayName": "OpenCode Hub — BYOK AI Chat",
   "description": "Open-source chat for VS Code that works with opencode first, plus Claude Code, Codex (ChatGPT), GitHub Copilot and any OpenAI-compatible or Anthropic model with your own keys. Sessions, /commands, file attachments, MCP toggles, token usage stats and a 3D companion.",
-  "version": "0.6.0",
+  "version": "0.6.1",
   "publisher": "rohit-chandra",
   "license": "MIT",
   "private": true,

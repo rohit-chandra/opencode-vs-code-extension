@@ -4,12 +4,20 @@ For the person who owns the repository: publishing to the stores, seeing how man
 
 ## Releasing a version
 
-1. Set `version` in `package.json` and add a section for it at the top of `CHANGELOG.md`.
-2. Run `npm run prices` (needs the `opencode` CLI) so the bundled list prices are current, and commit the result.
-3. Push to `main` and wait for CI to turn green.
-4. On GitHub: **Releases → Draft a new release**, create the tag `vX.Y.Z` on `main` (it must match `version`), and publish.
+Releases are automatic. There is nothing to tag or draft.
 
-The **Release** workflow then runs the tests again, builds `opencode-hub-X.Y.Z.vsix`, attaches it and its checksum to the release, and publishes to the stores that are set up (below).
+1. A change that users will see raises `version` (`npm version patch --no-git-tag-version`, or `minor` for a feature) and puts its notes under a `## vX.Y.Z` heading at the top of `CHANGELOG.md`. Claude does this as part of the change, in a session and in the pull requests of the issue agent.
+2. The change reaches `main` (a push, or a merged pull request) and CI runs.
+3. When CI is green and that version has no release yet, the **Release** workflow creates the tag `vX.Y.Z` on that commit, builds `opencode-hub-X.Y.Z.vsix`, creates the GitHub release with the changelog section as its notes, attaches the file and its checksum, and publishes to the stores that are set up (below).
+
+A push that does not change the version releases nothing. To see what happened, open **Actions → Release**; each run says in its summary whether it released, and why not when it did not.
+
+| If | Then |
+|---|---|
+| CI is red | Nothing is released. Fix `main`; the next green run releases |
+| You want to hold a version back | Leave `version` as it is until you are ready; several changes can share one version |
+| A release run failed half-way | **Actions → Release → Run workflow** on `main` builds and attaches whatever is missing |
+| You created a tag or a release by hand | It still works as long as the tag is `v` plus the `version` on that commit; otherwise the run fails and says which of the two to change |
 
 ## Visual Studio Marketplace
 
@@ -43,11 +51,11 @@ From the next release on, the `publish` job runs `vsce publish --oidc`.
 
 ### 3. The first version
 
-Publish a release (above). If the Marketplace refuses the first upload from the workflow because the extension does not exist yet, upload it once by hand: on the publisher page choose **New extension → Visual Studio Code** and drop in the `.vsix` from the GitHub release. Later versions go through the workflow.
+Let a version be released (above). If the Marketplace refuses the first upload from the workflow because the extension does not exist yet, upload it once by hand: on the publisher page choose **New extension → Visual Studio Code** and drop in the `.vsix` from the GitHub release. Later versions go through the workflow.
 
 A new listing is usually searchable within a few minutes; the Marketplace scans every upload first.
 
-To re-run publishing for a release that already exists: **Actions → Release → Re-run all jobs** on that release's run. Versions that are already in a store are skipped.
+To publish a release that already exists to a store you set up afterwards: **Actions → Release → Run workflow**, and tick **Publish again**. Versions that are already in a store are skipped.
 
 ## Open VSX (Cursor, VSCodium, Windsurf, Gitpod)
 

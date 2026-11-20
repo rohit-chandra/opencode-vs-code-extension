@@ -126,9 +126,12 @@ jobs:
             When you change code:
             - Run `npm run lint`, `npm run typecheck` and `npm test`, and fix what fails.
               Run `npm run build` too if you touched `webview/`.
-            - Add a line to the "Unreleased" section at the top of CHANGELOG.md.
-            - Do not edit anything under `.github/`, do not change `version` in package.json,
-              and do not publish or tag anything.
+            - Releases are automatic once your pull request is merged, so the change carries its
+              version: run `npm version patch --no-git-tag-version`, and put a line about the
+              change under a new `## vX.Y.Z` heading (that version, with the `v`) at the top of
+              CHANGELOG.md. If the topmost heading is already a newer version than the latest
+              release, add your line there and leave the version alone.
+            - Do not edit anything under `.github/`, and do not publish or tag anything.
             - Commit with a message that starts with "Fix #${{ github.event.issue.number }}: ".
 
             Finish your comment with: the cause, what you changed, how you checked it, and what a
@@ -136,7 +139,7 @@ jobs:
             macOS, which you cannot run here).
           claude_args: |
             --max-turns 80
-            --allowedTools "Bash(npm ci),Bash(npm run lint),Bash(npm run typecheck),Bash(npm test),Bash(npm test:*),Bash(npm run test:unit),Bash(npm run build),Bash(npx vitest run:*)"
+            --allowedTools "Bash(npm ci),Bash(npm run lint),Bash(npm run typecheck),Bash(npm test),Bash(npm test:*),Bash(npm run test:unit),Bash(npm run build),Bash(npx vitest run:*),Bash(npm version patch --no-git-tag-version)"
       - name: Open a pull request from Claude's branch
         if: steps.setup.outputs.ready == 'true' && steps.claude.outputs.branch_name != ''
         env:
@@ -211,4 +214,4 @@ jobs:
           include_comments_by_actor: '${{ github.repository_owner }},claude[bot]'
           claude_args: |
             --max-turns 80
-            --allowedTools "Bash(npm ci),Bash(npm run lint),Bash(npm run typecheck),Bash(npm test),Bash(npm test:*),Bash(npm run test:unit),Bash(npm run build),Bash(npx vitest run:*)"
+            --allowedTools "Bash(npm ci),Bash(npm run lint),Bash(npm run typecheck),Bash(npm test),Bash(npm test:*),Bash(npm run test:unit),Bash(npm run build),Bash(npx vitest run:*),Bash(npm version patch --no-git-tag-version)"

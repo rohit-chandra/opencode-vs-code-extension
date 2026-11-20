@@ -94,6 +94,13 @@ jobs:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           # Tag mode with a progress comment on the issue; Claude works on its own branch.
           track_progress: true
+          # In tag mode the action checks its own trigger again, whatever the job's `if` said:
+          # - labeled: the label must match. Its default is "claude"; ours is "claude-fix".
+          # - opened: the issue must contain the trigger phrase. A bug report from the form
+          #   always has the "What happened?" heading, so a bug opened by the owner or a
+          #   collaborator (the only "opened" case this job runs for) starts it.
+          label_trigger: claude-fix
+          trigger_phrase: ${{ github.event.action == 'opened' && 'What happened?' || '@claude' }}
           # In a public repository anyone can comment. Only the owner's comments (and
           # Claude's own) are given to the agent as context.
           include_comments_by_actor: '${{ github.repository_owner }},claude[bot]'

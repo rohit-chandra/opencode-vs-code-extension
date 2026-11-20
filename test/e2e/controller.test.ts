@@ -1,6 +1,7 @@
 import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import * as path from 'node:path';
+import { CatalogCache } from '../../src/core/catalogCache';
 import type { Engine } from '../../src/core/engine';
 import { killTree, spawnCli } from '../../src/core/process';
 import { UsageLedger } from '../../src/core/usageLedger';
@@ -29,7 +30,7 @@ const texts = (parts: Part[]) => parts.filter((p): p is Extract<Part, { type: 't
  * `controller.handleMessage`, and assertions are made on the view state the webview receives.
  */
 describe.skipIf(!bin)('ChatController with the real opencode engine', () => {
-  let mock: { listen(): Promise<number>; close(): Promise<void>; log: { path: string; body: Record<string, unknown> }[] };
+  let mock: { listen(): Promise<number>; close(): Promise<void>; log: { path: string; body: Record<string, unknown> }[]; models: string[] };
   let project: ReturnType<typeof makeOpencodeProject>;
   let ctx: TestContext;
   let host: FakeHost;
@@ -608,6 +609,102 @@ describe.skipIf(!bin)('ChatController with the real opencode engine', () => {
       held.release();
       controller2.dispose();
       await direct2.dispose();
+    }
+  });
+
+  it('picks up a model its provider has just released, and lets go of one it retired, without a restart', async () => {
+    const direct = engines.get('direct') as DirectEngine;
+    const ids = (v = host.view!) => v.providers.flatMap((p) => p.models.map((m) => m.modelId));
+    await controller.handleMessage({ type: 'setEngine', engine: 'direct' });
+    expect(ids()).toEqual(['mock-large', 'mock-small']);
+    await controller.handleMessage({ type: 'setModel', model: { providerId: 'mockoai', modelId: 'mock-large' } });
+    const asked = () => mock.log.filter((l) => l.path === '/models').length;
+    try {
+      // The provider releases a model. Nothing happens by itself within the same few seconds…
+      mock.models.push('mock-next');
+      let before = asked();
+      await controller.handleMessage({ type: 'modelsShown' });
+      await new Promise((r) => setTimeout(r, 400));
+      expect(asked()).toBe(before);
+      expect(ids()).not.toContain('mock-next');
+
+      // …but opening the model picker a little later asks the provider again.
+      direct.modelRecheckMs = 0;
+      controller.modelCheckIntervalMs = 0;
+      await controller.handleMessage({ type: 'modelsShown' });
+      let v = await host.until((s) => ids(s).includes('mock-next'), 10_000, 'the new model in the picker');
+      expect(ids(v)).toEqual(['mock-large', 'mock-next', 'mock-small']);
+      expect(v.model).toEqual({ providerId: 'mockoai', modelId: 'mock-large' });
+      expect(asked()).toBe(before + 1);
+      // It can be used straight away.
+      await controller.handleMessage({ type: 'setModel', model: { providerId: 'mockoai', modelId: 'mock-next' } });
+      await controller.handleMessage({ type: 'send', text: 'hello new model' });
+      v = await host.until((s) => s.activity === 'idle' && s.messages.some((m) => texts(m.parts).join('') === 'MOCK[mock-next]: hello new model'), 20_000, 'a reply from the new model');
+
+      // So does a window that was simply left open: the next time it comes into view after a while…
+      mock.models.push('mock-later');
+      controller.catalogMaxAgeMs = 0;
+      controller.onShown();
+      await host.until((s) => ids(s).includes('mock-later'), 10_000, 'the model released while the window was open');
+      // …or when a reply finishes.
+      mock.models.push('mock-latest');
+      await controller.handleMessage({ type: 'send', text: 'and one more' });
+      await host.until((s) => ids(s).includes('mock-latest'), 20_000, 'the model released during a conversation');
+
+      // The provider retires the selected model: it leaves the list and another one is selected.
+      mock.models.splice(mock.models.indexOf('mock-next'), 1);
+      await host.until((s) => s.activity === 'idle');
+      await controller.handleMessage({ type: 'modelsShown' });
+      v = await host.until((s) => !ids(s).includes('mock-next'), 10_000, 'the retired model gone');
+      expect(ids(v)).toEqual(['mock-large', 'mock-later', 'mock-latest', 'mock-small']);
+      expect(v.model).toEqual({ providerId: 'mockoai', modelId: 'mock-large' });
+
+      // A provider that cannot be reached keeps the list it had.
+      before = asked();
+      const real = ctx.settings['providers'];
+      ctx.settings['providers'] = (real as { id: string; baseUrl: string }[]).map((p) => (p.id === 'mockoai' ? { ...p, baseUrl: 'http://127.0.0.1:9/v1' } : p));
+      await controller.handleMessage({ type: 'modelsShown' });
+      await new Promise((r) => setTimeout(r, 600));
+      ctx.settings['providers'] = real;
+      expect(ids()).toEqual(['mock-large', 'mock-later', 'mock-latest', 'mock-small']);
+
+      // The saved copy that the next window starts from has the new list too.
+      await controller.handleMessage({ type: 'modelsShown' });
+      await host.until(() => asked() > before, 10_000, 'the provider asked again');
+      await controller.flush();
+      const saved = await new CatalogCache(path.join(ctx.storageDir, 'catalog')).get('direct', host.cwd());
+      expect(saved!.providers.flatMap((p) => p.models.map((m) => m.modelId))).toEqual(['mock-large', 'mock-later', 'mock-latest', 'mock-small']);
+    } finally {
+      mock.models.splice(0, mock.models.length, 'mock-small', 'mock-large');
+      direct.modelRecheckMs = 10_000;
+      controller.modelCheckIntervalMs = 15_000;
+      controller.catalogMaxAgeMs = 10 * 60_000;
+      direct.invalidateModels();
+      await controller.handleMessage({ type: 'setEngine', engine: 'opencode' });
+    }
+  });
+
+  it('opencode: opening the model picker asks the server again, so its catalogue is never a stale copy', async () => {
+    const opencode = engines.get('opencode')!;
+    const real = opencode.listProviders.bind(opencode);
+    let asked = 0;
+    // The server now reports one more model than a moment ago, as it does after its catalogue updates.
+    opencode.listProviders = async () => {
+      asked++;
+      const providers = await real();
+      return providers.map((p) => (p.id === 'mock' ? { ...p, models: [...p.models, { providerId: 'mock', modelId: 'mock-brand-new', name: 'Mock Brand New' }] } : p));
+    };
+    controller.modelCheckIntervalMs = 0;
+    try {
+      await controller.handleMessage({ type: 'modelsShown' });
+      const v = await host.until((s) => s.providers.some((p) => p.models.some((m) => m.modelId === 'mock-brand-new')), 10_000, 'the model the server now lists');
+      expect(asked).toBeGreaterThan(0);
+      expect(v.model).toEqual(host.state.get('model.opencode'));
+    } finally {
+      opencode.listProviders = real;
+      await controller.handleMessage({ type: 'modelsShown' });
+      await host.until((s) => !s.providers.some((p) => p.models.some((m) => m.modelId === 'mock-brand-new')), 10_000, 'back to the real list');
+      controller.modelCheckIntervalMs = 15_000;
     }
   });
 

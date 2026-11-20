@@ -102,6 +102,8 @@ export type WebviewToHost =
   | { type: 'setEngine'; engine: EngineId }
   | { type: 'setModel'; model: ModelRef }
   | { type: 'setEffort'; effort: string | null }
+  /** The model picker was opened: a good moment to check the list is current. */
+  | { type: 'modelsShown' }
   | { type: 'setAgent'; agent: string }
   | { type: 'pickFiles' }
   | { type: 'addAttachment'; attachment: Attachment }

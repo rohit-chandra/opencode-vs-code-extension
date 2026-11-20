@@ -35,6 +35,7 @@ describe('Claude Code: signing in with a subscription and the models that follow
   let ctx: TestContext;
   let host: FakeHost;
   let controller: ChatController;
+  let engine: ClaudeCodeEngine;
   let stateFile: string;
   const set = (state: object) => writeFileSync(stateFile, JSON.stringify(state));
   /** How many times the extension has asked the CLI for its models. */
@@ -56,7 +57,8 @@ describe('Claude Code: signing in with a subscription and the models that follow
     ctx.settings['claudeCode.path'] = launcher;
     set({ loggedIn: false, models: GENERIC });
     host = new FakeHost(ctx);
-    controller = new ChatController(new Map<EngineId, Engine>([['claude-code', new ClaudeCodeEngine(ctx)]]), new UsageLedger(new MemoryStore()), host);
+    engine = new ClaudeCodeEngine(ctx);
+    controller = new ChatController(new Map<EngineId, Engine>([['claude-code', engine]]), new UsageLedger(new MemoryStore()), host);
     controller.relistAgainMs = 1500;
     await controller.handleMessage({ type: 'ready' });
     await controller.activate();
@@ -132,4 +134,39 @@ describe('Claude Code: signing in with a subscription and the models that follow
     expect(ctx.settings['claudeCode.models']).toEqual(['claude-sonnet-4-6']);
     expect(ids().filter((id) => id === 'claude-sonnet-4-6')).toHaveLength(1);
   });
+  it('lists a model Anthropic has just released the next time the picker opens, with its effort levels', async () => {
+    const signedIn = { loggedIn: true, email: 'other@example.com', subscriptionType: 'pro' };
+    const released = { ...entry('nova', 'Nova', 'Nova 6 · Released today · $3/$15 per Mtok'), supportsEffort: true, supportedEffortLevels: ['low', 'medium', 'high', 'max'] };
+    set({ ...signedIn, models: [...MAX_PLAN.slice(0, 4), released] });
+    const before = listings();
+
+    // Opened again within seconds: the CLI was only just asked, so it is left alone.
+    await controller.handleMessage({ type: 'modelsShown' });
+    await new Promise((r) => setTimeout(r, 300));
+    expect(listings()).toBe(before);
+    expect(names()).not.toContain('Nova 6');
+
+    // Opened a little later: the CLI is asked in the background and the new model appears.
+    engine.modelRecheckMs = 0;
+    controller.modelCheckIntervalMs = 0;
+    await controller.handleMessage({ type: 'modelsShown' });
+    const v = await host.until(() => names().includes('Nova 6'), 20_000, 'the newly released model');
+    expect(listings()).toBeGreaterThan(before);
+    const nova = v.providers[0].models.find((m) => m.modelId === 'nova')!;
+    expect(nova.efforts!.map((e) => e.id)).toEqual(['low', 'medium', 'high', 'max']);
+    // The model that was selected stays selected.
+    expect(v.model).toEqual({ providerId: 'claude-code', modelId: 'claude-sonnet-4-6' });
+
+    // A window left open notices too, when it comes back into view after a while.
+    set({ ...signedIn, models: [...MAX_PLAN.slice(0, 4), released, entry('pulsar', 'Pulsar', 'Pulsar 1 · Released a week later')] });
+    controller.catalogMaxAgeMs = 0;
+    controller.onShown();
+    await host.until(() => names().includes('Pulsar 1'), 20_000, 'the model released while the window was open');
+
+    // A retired model leaves the list.
+    set({ ...signedIn, models: [...MAX_PLAN.slice(0, 4), released] });
+    await controller.handleMessage({ type: 'modelsShown' });
+    await host.until(() => !names().includes('Pulsar 1'), 20_000, 'the retired model gone');
+    expect(names()).toContain('Nova 6');
+  }, 90_000);
 });

@@ -37,10 +37,12 @@ concurrency:
 
 jobs:
   release:
-    # After CI: only a green run for a push to main (not a pull request, not a manual run).
+    # After CI: only a green run on main itself, started by a push or by hand (the weekly price
+    # refresh starts it that way). Never for a pull request.
     if: >-
       github.event_name != 'workflow_run' ||
-      (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push' && github.event.workflow_run.head_branch == 'main')
+      (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_branch == 'main' &&
+       (github.event.workflow_run.event == 'push' || github.event.workflow_run.event == 'workflow_dispatch'))
     runs-on: ubuntu-latest
     outputs:
       publish: ${{ steps.plan.outputs.publish }}

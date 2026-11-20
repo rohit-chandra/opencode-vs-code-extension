@@ -1,0 +1,79 @@
+name: Model prices
+
+# Keeps cost estimates current without anyone doing anything. Once a week the list prices
+# that ship with the extension (src/core/prices.json) are regenerated from the model catalogue
+# the opencode CLI carries. When a price changed or a model was added, the change is committed
+# to main as a patch version with a changelog line, CI is started for it, and the Release
+# workflow publishes it once CI is green. Nothing happens in a week without changes.
+#
+# To pause it: Actions → Model prices → ⋯ → Disable workflow.
+on:
+  schedule:
+    - cron: '17 6 * * 1' # Mondays, 06:17 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: write # commit the refreshed table to main
+  actions: write # start CI for that commit (a push by a workflow does not start it by itself)
+
+concurrency:
+  group: prices
+  cancel-in-progress: false
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: main
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - name: Regenerate the price table
+        id: prices
+        run: |
+          npm install -g opencode-ai
+          cp src/core/prices.json "$RUNNER_TEMP/before.json"
+          npm run prices
+          note="$(node scripts/prices-diff.mjs "$RUNNER_TEMP/before.json" src/core/prices.json)"
+          if [ -z "$note" ]; then
+            # Only the date in the file moved; keep the repository as it was.
+            git checkout -- src/core/prices.json
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "No price changed this week. Nothing to do." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            { echo "note<<__NOTE__"; echo "$note"; echo "__NOTE__"; } >> "$GITHUB_OUTPUT"
+            echo "$note" >> "$GITHUB_STEP_SUMMARY"
+          fi
+      - name: Version and changelog
+        if: steps.prices.outputs.changed == 'true'
+        env:
+          NOTE: ${{ steps.prices.outputs.note }}
+        run: |
+          npm version patch --no-git-tag-version
+          node scripts/changelog-add.mjs Changed "$NOTE"
+      # A table that breaks the estimates must not reach main, let alone users.
+      - name: Check
+        if: steps.prices.outputs.changed == 'true'
+        run: |
+          npm run lint
+          npm run typecheck
+          npm test
+      - name: Commit to main and start CI
+        if: steps.prices.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version="$(node -p "require('./package.json').version")"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src/core/prices.json package.json package-lock.json CHANGELOG.md
+          git commit -m "v$version: model prices refreshed"
+          git push origin HEAD:main
+          # CI on main, then the Release workflow, turn this commit into the release.
+          gh workflow run ci.yml --ref main
+          echo "Committed v$version. CI is running; the release follows when it is green." >> "$GITHUB_STEP_SUMMARY"

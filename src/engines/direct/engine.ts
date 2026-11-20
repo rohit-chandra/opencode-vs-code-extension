@@ -100,6 +100,46 @@ export class DirectEngine extends LocalEngine {
     this.state = { engine: 'direct', state: 'idle' };
   }
 
+  /** A provider's own list of models (`GET /models`), as the picker shows it. */
+  private async fetchModels(p: ReturnType<typeof resolveProvider>, key: string | undefined): Promise<ModelInfo[]> {
+    const efforts = effortsFor(p.type);
+    const ids = await fetchModelIds(p.type, p.baseUrl, key, p.headers);
+    return ids.map((m) => ({ providerId: p.id, modelId: m.id, name: m.name ?? m.id, pricing: p.pricing?.[m.id], supportsTools: true, efforts })).sort((a, b) => a.name.localeCompare(b.name));
+  }
+
+  /** Minimum age of a provider's list before `refreshModels` asks the provider again. */
+  modelRecheckMs = 10_000;
+
+  /**
+   * Ask each provider for its models again, in the background (see `Engine.refreshModels`):
+   * a provider adds and retires models without telling anyone. A provider that cannot be
+   * reached keeps the list it had.
+   */
+  refreshModels(): void {
+    void (async () => {
+      let changed = false;
+      await Promise.all(
+        this.providers().map(async (p) => {
+          // A list written in the settings is the user's; there is nothing to ask.
+          if ((p.models ?? []).length > 0) return;
+          const cached = this.modelCache.get(p.id);
+          // Never listed (listProviders does that), or listed a moment ago.
+          if (!cached || Date.now() - cached.at < this.modelRecheckMs) return;
+          const key = await this.apiKey(p);
+          if (!p.keyless && !key) return;
+          try {
+            const models = await this.fetchModels(p, key);
+            if (models.map((m) => m.modelId).join('\n') !== cached.models.map((m) => m.modelId).join('\n')) changed = true;
+            this.modelCache.set(p.id, { at: Date.now(), models });
+          } catch (err) {
+            this.ctx.log.debug(`Could not refresh the models of ${p.id}: ${err instanceof Error ? err.message : String(err)}`);
+          }
+        }),
+      );
+      if (changed) this.emit({ type: 'catalog.changed' });
+    })();
+  }
+
   async listProviders(): Promise<ProviderInfo[]> {
     return Promise.all(
       this.providers().map(async (p) => {
@@ -113,8 +153,7 @@ export class DirectEngine extends LocalEngine {
             models = cached.models;
           } else {
             try {
-              const ids = await fetchModelIds(p.type, p.baseUrl, key, p.headers);
-              models = ids.map((m) => ({ providerId: p.id, modelId: m.id, name: m.name ?? m.id, pricing: p.pricing?.[m.id], supportsTools: true, efforts })).sort((a, b) => a.name.localeCompare(b.name));
+              models = await this.fetchModels(p, key);
               this.modelCache.set(p.id, { at: Date.now(), models });
             } catch (err) {
               this.ctx.log.warn(`Could not list models for ${p.id}: ${err instanceof Error ? err.message : String(err)}`);

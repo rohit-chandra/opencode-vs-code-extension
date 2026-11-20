@@ -94,10 +94,10 @@ Skip this step if Step 1 worked. Get the file one of these ways:
 Then install it: in the Extensions view, click the **…** menu, choose **Install from VSIX…** and select the file. Or run **Extensions: Install from VSIX…** from the Command Palette, or use a terminal:
 
 ```bash
-code --install-extension opencode-hub-0.6.1.vsix
+code --install-extension opencode-hub-0.6.2.vsix
 ```
 
-Use `cursor`, `codium` or `windsurf` in place of `code` for those editors. If `code` is not found on macOS, run *Shell Command: Install 'code' command in PATH* from the Command Palette first. On Windows, quote the path if it contains spaces: `code --install-extension "D:\Downloads\opencode-hub-0.6.1.vsix"`.
+Use `cursor`, `codium` or `windsurf` in place of `code` for those editors. If `code` is not found on macOS, run *Shell Command: Install 'code' command in PATH* from the Command Palette first. On Windows, quote the path if it contains spaces: `code --install-extension "D:\Downloads\opencode-hub-0.6.2.vsix"`.
 
 ### Step 3: Open the chat
 
@@ -277,6 +277,7 @@ Output of `/help` and `/doctor` is a card with a close button; it is not part of
 
 - When a reply fails, or you stop it, a **Retry** button appears under it. It sends your last message again (attachments are not re-sent).
 - The model picker lists the models you used most recently for the current engine at the top, above the full list by provider.
+- New models appear by themselves. The lists are not built into the extension: they come from the engine each time (the CLI's list for your account, opencode's catalogue, a BYOK provider's `/models`, VS Code's model API). The chat asks again when you open the picker, when it comes back into view after a while and after a reply, so a window left open for days still gets a model released today. With Codex and Claude Code the CLI decides what it lists, and an old CLI may not list the newest models: update the CLI when one is missing.
 
 ### Effort
 
@@ -392,7 +393,7 @@ Statistics are stored locally in VS Code and survive restarts. *OpenCode Hub: Re
 | Direct BYOK: Ollama, LM Studio and other local or custom endpoints | None, unless you add prices under `pricing` in `opencodeHub.providers` |
 | Copilot | None. Copilot does not report usage, so even the token numbers are estimates from the model's tokenizer |
 
-Estimates use a price table that ships with the extension (it is refreshed with each release, and nothing is downloaded while you work), so a price that changed last week can be off until the next update. With a subscription (a ChatGPT plan in Codex, a Claude plan in Claude Code) you are not billed per token: the figure is what the same tokens would cost through the API. Prices you set under `pricing` always win, and `opencodeHub.usage.estimateCost` turns estimates off.
+Estimates use a price table that ships with the extension. It is regenerated every week and released automatically when a price changed or a model was added; nothing is downloaded while you work, so a model released this week has no estimate until that update arrives. With a subscription (a ChatGPT plan in Codex, a Claude plan in Claude Code) you are not billed per token: the figure is what the same tokens would cost through the API. Prices you set under `pricing` always win, and `opencodeHub.usage.estimateCost` turns estimates off.
 
 ### Oki, the companion
 

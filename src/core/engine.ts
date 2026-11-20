@@ -62,6 +62,13 @@ export interface Engine {
   getMessages(sessionId: string): Promise<ChatMessage[]>;
 
   listProviders(): Promise<ProviderInfo[]>;
+  /**
+   * The user is looking at the model list, or it has not been checked for a while: ask the
+   * backend again unless it was asked moments ago. Returns at once; `catalog.changed` follows
+   * when the list turned out different (a model was released, retired, or the plan changed).
+   * Engines whose `listProviders` asks the backend every time do not need it.
+   */
+  refreshModels?(): void;
   defaultModel(): Promise<ModelRef | undefined>;
   listAgents(): Promise<AgentInfo[]>;
   listCommands(): Promise<SlashCommand[]>;

@@ -147,6 +147,10 @@ const MAX_MODEL_ROWS = 150;
 
 export function ModelsPanel({ s, onClose }: { s: ViewState; onClose: () => void }) {
   const [query, setQuery] = useState('');
+  // Opening the picker asks the engine whether its list is still current (new models, a changed plan).
+  useEffect(() => {
+    send({ type: 'modelsShown' });
+  }, []);
   const q = query.trim().toLowerCase();
   // Some engines offer thousands of models; render a bounded list and let search narrow it down.
   let room = MAX_MODEL_ROWS;

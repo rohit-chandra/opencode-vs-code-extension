@@ -1,5 +1,12 @@
 # Changelog
 
+## v0.6.2
+
+### Added
+
+- **New models show up by themselves.** Every model list comes from the engine (the Claude Code and Codex CLIs for your account, opencode's catalogue, a BYOK provider's own list, VS Code's model API), so a newly released model needs no update of the extension. The chat now also asks again while VS Code stays open: when you open the model picker, when the chat comes back into view after a while, and after a reply. A model the provider has retired leaves the list, and if it was the selected one another is selected. A provider that cannot be reached keeps the list it had.
+- **Cost estimates keep up with new models.** The list prices that ship with the extension are refreshed every week and released automatically when something changed.
+
 ## v0.6.1
 
 ### Changed

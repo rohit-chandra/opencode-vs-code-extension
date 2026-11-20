@@ -97,6 +97,14 @@ export class CodexEngine extends LocalEngine {
     this.modelList.invalidate();
   }
 
+  /** Minimum age of the list before `refreshModels` asks the CLI again. */
+  modelRecheckMs = 10_000;
+
+  /** Ask the CLI for the account's models again, in the background (see `Engine.refreshModels`). */
+  refreshModels(): void {
+    this.modelList.refresh(this.account.mode(), this.modelRecheckMs);
+  }
+
   /** The models the signed-in account (ChatGPT plan or API key) can use, from `codex app-server`. */
   private accountModels(): Promise<{ models: ModelInfo[]; defaultName?: string }> {
     return this.modelList.get(this.account.mode());

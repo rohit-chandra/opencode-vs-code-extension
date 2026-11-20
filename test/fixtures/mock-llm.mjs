@@ -88,12 +88,15 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 export function createMockLlm({ delayMs = 2 } = {}) {
   /** Requests received by this instance (path, auth headers, parsed body). */
   const log = [];
+  /** What `GET /models` lists. Tests add and remove ids to play a provider releasing or retiring a model. */
+  const models = ['mock-small', 'mock-large'];
   const server = http.createServer(async (req, res) => {
     const url = new URL(req.url, 'http://x');
     const p = url.pathname.replace(/^\/v1/, '');
     if (req.method === 'GET' && p === '/models') {
+      log.push({ path: '/models', headers: { authorization: req.headers.authorization, 'x-api-key': req.headers['x-api-key'] }, body: {} });
       res.writeHead(200, { 'content-type': 'application/json' });
-      res.end(JSON.stringify({ object: 'list', data: [{ id: 'mock-small', object: 'model', owned_by: 'mock' }, { id: 'mock-large', object: 'model', owned_by: 'mock' }] }));
+      res.end(JSON.stringify({ object: 'list', data: models.map((id) => ({ id, object: 'model', owned_by: 'mock' })) }));
       return;
     }
     if (req.method === 'GET' && p === '/__log') {
@@ -226,6 +229,7 @@ export function createMockLlm({ delayMs = 2 } = {}) {
   return {
     server,
     log,
+    models,
     listen: (port = 0) => new Promise((resolve) => server.listen(port, '127.0.0.1', () => resolve(server.address().port))),
     close: () => new Promise((resolve) => { server.closeAllConnections?.(); server.close(() => resolve()); }),
   };

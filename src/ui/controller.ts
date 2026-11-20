@@ -91,6 +91,11 @@ export class ChatController {
   private lastAuthCheck = 0;
   /** How long after a sign-in the models are listed a second time (the tests shorten it). */
   relistAgainMs = 20_000;
+  /** How long an engine's model list may go unchecked before the chat coming into view, or a finished reply, asks again. */
+  catalogMaxAgeMs = 10 * 60_000;
+  /** Opening the model picker asks again, at most this often. */
+  modelCheckIntervalMs = 15_000;
+  private lastModelCheck = Date.now();
   /** Engine whose providers `state.providers` holds, to tell a new connection from an engine switch. */
   private catalogEngine: EngineId | undefined;
   /** The last model list of each engine, shown at once while the fresh one is fetched. */
@@ -178,6 +183,7 @@ export class ChatController {
       this.set({ loading: false, sessions: [], sessionId: undefined, messages: [], providers: [], agents: [], mcp: [], commands: mergeCommands([]), model: undefined, agent: undefined, auth: undefined });
       return;
     }
+    this.lastModelCheck = Date.now();
     await Promise.all([this.refreshCatalog(), this.refreshMcp(), this.refreshSessions(), this.refreshAuth(), this.refreshOtherSessions()]);
     if (run !== this.activation) return;
     const last = this.host.state.get<string>(`session.${engine.id}`);
@@ -383,10 +389,32 @@ export class ChatController {
    * in the browser or a terminal): check the sign-in again, at most every few seconds.
    */
   onShown(): void {
+    this.recheckModels(this.catalogMaxAgeMs);
     if (!this.engine.account || this.engine.status().state !== 'ready' || this.signInPending) return;
     if (Date.now() - this.lastAuthCheck < 10_000) return;
     this.lastAuthCheck = Date.now();
     void this.refreshAuth();
+  }
+
+  /** The model picker was opened: make sure what it shows is current. */
+  modelsShown(): void {
+    this.recheckModels(this.modelCheckIntervalMs);
+  }
+
+  /**
+   * New models appear without an update of the extension, because every list comes from the
+   * engine: the CLI's list for the account, opencode's catalogue, a provider's `/models`,
+   * VS Code's model API. This asks the engine again (unless it was asked within `minAgeMs`)
+   * so that a window left open for days does not keep showing last week's list.
+   */
+  private recheckModels(minAgeMs: number): void {
+    const engine = this.engine;
+    if (!this.host.workspaceTrusted() || engine.status().state !== 'ready') return;
+    if (Date.now() - this.lastModelCheck < minAgeMs) return;
+    this.lastModelCheck = Date.now();
+    // Engines that keep their own copy re-ask in the background and report a change; the others answer live.
+    engine.refreshModels?.();
+    this.debounce('catalog', 100, () => void this.refreshCatalog());
   }
 
   /** The list of extra models in settings changed. */
@@ -456,6 +484,8 @@ export class ChatController {
         this.set({ activity: event.activity, activityDetail: event.detail, canRetry });
         // A failed reply may mean the login expired: show the sign-in prompt if so.
         if (ended && last?.role === 'assistant' && last.error && this.engine.account) void this.refreshAuth();
+        // A long-lived window: look for new models now and then, when a reply has just finished.
+        if (ended) this.recheckModels(this.catalogMaxAgeMs);
         return;
       }
       case 'message.updated':
@@ -1460,6 +1490,8 @@ export class ChatController {
         return this.setModel(msg.model);
       case 'setEffort':
         return this.setEffort(msg.effort ?? undefined);
+      case 'modelsShown':
+        return this.modelsShown();
       case 'setAgent':
         return this.setAgent(msg.agent);
       case 'pickFiles':

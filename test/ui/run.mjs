@@ -1170,6 +1170,8 @@ await test('model picker says it is loading while an engine is asked for the fir
   await t.page.click('.pill.model');
   await t.page.waitForSelector('.sheet .empty-note');
   assert.equal(await t.text('.sheet .empty-note'), 'Loading models…');
+  // Opening the picker tells the host, which checks with the engine that the list is current.
+  assert.deepEqual(await t.posted('modelsShown'), [{ type: 'modelsShown' }]);
   // The list arrives: the note gives way to it without reopening the picker.
   await t.host({ type: 'patch', patch: { providers: base.providers, model: base.model, loading: false } });
   await t.page.waitForFunction(() => !document.querySelector('.sheet .empty-note') && document.querySelectorAll('.sheet .row').length > 0);

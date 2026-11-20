@@ -128,6 +128,14 @@ export class ClaudeCodeEngine extends LocalEngine {
     this.models.invalidate();
   }
 
+  /** Minimum age of the list before `refreshModels` asks the CLI again. */
+  modelRecheckMs = 10_000;
+
+  /** Ask the CLI for the account's models again, in the background (see `Engine.refreshModels`). */
+  refreshModels(): void {
+    this.models.refresh(this.account.mode(), this.modelRecheckMs);
+  }
+
   /** The models the signed-in account can use, with their real names (e.g. "Opus 5.5"), as the CLI reports them. */
   private accountModels(): Promise<ModelInfo[]> {
     return this.models.get(this.account.mode());

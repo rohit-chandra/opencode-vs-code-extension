@@ -19,6 +19,12 @@ A push that does not change the version releases nothing. To see what happened, 
 | A release run failed half-way | **Actions → Release → Run workflow** on `main` builds and attaches whatever is missing |
 | You created a tag or a release by hand | It still works as long as the tag is `v` plus the `version` on that commit; otherwise the run fails and says which of the two to change |
 
+### Prices that update themselves
+
+Cost estimates use the list prices in `src/core/prices.json`. The **Model prices** workflow regenerates that file every Monday from the catalogue the `opencode` CLI carries. When a price changed or a model was added it commits the file to `main` as a patch version with a changelog line and starts CI; the release follows as above. A week without changes does nothing. To pause it, disable the workflow under **Actions → Model prices**; to run it now, **Run workflow** there. `npm run prices` does the same by hand.
+
+Because that workflow commits to `main`, pull before you push after a Monday (`git pull --rebase`).
+
 ## Visual Studio Marketplace
 
 This is what makes the extension show up when someone searches in the Extensions view of VS Code. It is set up once.

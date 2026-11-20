@@ -15,7 +15,18 @@ Works on **Windows, macOS and Linux**, including remote windows (SSH, WSL, dev c
 
 > This is an independent community project. It is not built by or affiliated with the opencode team, Anthropic, OpenAI, GitHub or Microsoft.
 
-**Contents:** [Engines](#engines) · [Install](#install) · [Where the chat lives](#where-the-chat-lives) · [Features](#features) · [Feedback](#feedback) · [How it works](#how-it-works) · [Performance](#performance) · [Settings](#settings) · [Security and privacy](#security-and-privacy) · [Development](#development)
+## Contents
+
+| **Get started** | **Daily use** | **Under the hood** | **Project** |
+|---|---|---|---|
+| [Engines](#engines) | [Slash commands](#slash-commands) | [System design](#system-design) | [Feedback](#feedback) |
+| [Install](#install) | [Ask about your code](#ask-about-your-code) | [Sending a message](#what-happens-when-you-send-a-message) | [Development](#development) |
+| [Connect an engine](#step-4-connect-an-engine) | [Attachments](#attachments) | [Performance](#performance) | [Tests](#tests) |
+| [Where the chat lives](#where-the-chat-lives) | [Sessions](#sessions) | [Settings](#settings) | [Releasing and maintaining](#releasing-and-maintaining) |
+| [If something does not work](#if-something-does-not-work) | [Ask or Auto](#ask-or-auto) | [Security and privacy](#security-and-privacy) | [Licence](#licence) |
+|  | [MCP servers](#mcp-servers) | [Limits worth knowing](#limits-worth-knowing) |  |
+|  | [Token usage and cost](#token-usage) |  |  |
+|  | [Oki, the companion](#oki-the-companion) |  |  |
 
 ## Engines
 

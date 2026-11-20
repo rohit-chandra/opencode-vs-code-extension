@@ -161,7 +161,7 @@ For a local server such as Ollama or LM Studio, start the server first; no key i
 2. In the chat: `/engine`, then **Claude Code**.
 3. Click **Sign in with Claude**. A terminal runs `claude auth login --claudeai` and your browser opens; sign in with your Claude account. The chat notices when you are done.
 
-The model picker lists the models your Claude plan includes, as Claude Code reports them for your account (for example Fable 5.2, Opus 5.5, Sonnet 5.5, Haiku 5.5). The list follows your account: it is fetched again after you sign in, after the first reply, and whenever the window gets the focus back after a sign-in elsewhere.
+The model picker lists the models your Claude plan includes, as Claude Code reports them for your account (for example Fable 5.2, Opus 5.5, Sonnet 5.5, Haiku 5.5). The list follows your account: it is fetched again after you sign in, after the first reply, when you open the model picker, and whenever the window gets the focus back after a sign-in elsewhere. Models with an effort setting show an effort button next to the model name (see [Effort](#effort)).
 
 After that list come the entries Claude Code accepts but may leave out for your account: any of the Fable, Opus, Sonnet and Haiku families that is missing, and **Opus Plan Mode** (Opus while planning, Sonnet for the rest). For anything else, such as an earlier version, click **Add a model by name…** at the bottom of the picker and type its id (for example `claude-opus-5`); it is kept in `opencodeHub.claudeCode.models`. If your plan does not include a model, Claude's reply says so.
 
@@ -176,7 +176,7 @@ Your Claude Pro or Max plan is used, not per-token API billing. In this mode the
 2. In the chat: `/engine`, then **Codex (ChatGPT)**.
 3. Click **Sign in with ChatGPT**. A terminal runs `codex login` and your browser opens; sign in with your ChatGPT account. On a remote machine (SSH, WSL, a container) use **Use a device code** instead.
 
-The model picker lists the models of your ChatGPT plan, as `codex app-server` reports them, with *Default* (your `config.toml` model or Codex's recommended one) first.
+The model picker lists the models of your ChatGPT plan, as `codex app-server` reports them, with *Default* (your `config.toml` model or Codex's recommended one) first, and each model's reasoning effort levels (see [Effort](#effort)). Codex only lists the models your installed CLI version supports: if the newest ones are missing, run `npm install -g @openai/codex@latest` and reload the window.
 
 Your ChatGPT Plus or Pro plan is used, not per-token API billing; `CODEX_API_KEY` is hidden from the CLI in this mode. If Codex was signed in with an API key earlier, the chat says so and offers the ChatGPT sign-in. **Use an API key instead** (or `/login`) switches to a key kept in VS Code Secret Storage.
 
@@ -433,7 +433,7 @@ Oki is an original character made for this project.
 The extension has three layers:
 
 1. **The chat webview** is a small Preact app. It holds no secrets and cannot reach the network; everything it knows arrives as messages from the extension host. Oki is a second bundle that the webview loads once the chat is on screen.
-2. **The chat controller** owns the one view state: the session list, the open conversation, models, MCP servers, pending approvals and usage. It runs the built-in slash commands, prepares attachments and decides what the webview needs to hear about.
+2. **The chat controller** owns the one view state: the session list, the open conversation, models and their effort levels, MCP servers, pending approvals and questions, and usage. It runs the built-in slash commands, prepares attachments and decides what the webview needs to hear about.
 3. **Engines** hide the differences between backends. Each one implements the same `Engine` interface and translates its backend's stream into the same events (`message.updated`, `part.delta`, `session.status`, `usage` and a few more), so the UI and the usage statistics never contain engine-specific code.
 
 | Engine | How it talks to its backend | Who keeps the sessions |
@@ -452,6 +452,7 @@ A few details that matter:
 
 - **Streaming sends differences, not documents.** The host and the webview run the same reducer over the same events, so a long reply is never re-sent as a whole.
 - **Usage is counted once.** The ledger is keyed by message id. Reloading history or receiving the same update twice changes nothing.
+- **Questions travel that path too.** When the model asks you something (opencode's question tool, Claude Code's `AskUserQuestion`, or the `ask_user` tool offered to Direct BYOK and Copilot models), the engine emits the questions, the chat shows them one at a time, and your answers go back as the tool's result. Auto mode never answers them for you.
 - **Approvals travel the same path.** When opencode asks for a permission, Claude Code calls its permission-prompt tool, or an MCP tool is about to run in Direct BYOK or Copilot, the engine emits a request, the chat shows it, and your answer goes back to the engine. In Auto mode the answer is "allow" straight away.
 - **MCP toggles go to whoever owns the servers.** For opencode that is the running opencode instance; for Direct BYOK and Copilot it is the extension's own MCP client; Claude Code and Codex get the enabled set as start-up arguments.
 
@@ -524,12 +525,13 @@ A custom provider looks like this:
 - Model output is sanitized before it is shown. The chat view loads no remote content.
 - The saved model lists (for an instant picker) are plain files in the extension's storage folder. They hold model names and capabilities only, and an engine you have not selected is never asked for its list in the background.
 - In an untrusted workspace no engine is started and chat is off, because engines run executables, load project configuration (MCP servers, plugins) and can run tools. Engine settings stored in the workspace (CLI paths, providers, MCP servers) are ignored there.
-- Tool permissions: in Ask mode, opencode permission requests, Claude Code tool calls and MCP tool calls in Direct BYOK and Copilot are shown for approval. Claude Code's requests come through a small MCP server the extension writes to its storage folder and gives the CLI with `--permission-prompt-tool`; it talks only to `127.0.0.1` with a random token per turn. Codex runs non-interactively, so what it may do is set by `codex.sandbox`. In Auto mode everything is approved without asking.
+- Tool permissions: in Ask mode, opencode permission requests, Claude Code tool calls and MCP tool calls in Direct BYOK and Copilot are shown for approval. Claude Code's requests, and the questions it asks you, come through a small MCP server the extension writes to its storage folder and gives the CLI with `--permission-prompt-tool`; it talks only to `127.0.0.1` with a random token per turn. Codex runs non-interactively, so what it may do is set by `codex.sandbox`. In Auto mode everything is approved without asking.
 
 ## Limits worth knowing
 
-- Codex cannot ask for approval mid-run; choose its sandbox in settings.
-- The Direct BYOK and Copilot engines are chat with MCP tools. They do not edit files on their own; use opencode, Claude Code or Codex for agentic coding.
+- Codex cannot ask for approval mid-run, and it has no question card: it asks in plain text and you answer in the chat. Choose its sandbox in settings.
+- The Direct BYOK and Copilot engines are chat with MCP tools (and the tool for asking you questions). They do not edit files on their own; use opencode, Claude Code or Codex for agentic coding.
+- Effort levels and model lists are the engine's: Codex and Claude Code list what your installed CLI knows, so an old CLI can leave out the newest models and levels. Update the CLI when one is missing. Copilot has no effort setting.
 - Direct BYOK keeps a long conversation going by leaving the oldest turns out of the request once the provider reports that the context window is full (the chat tells you when that starts). It does not summarize them. Local servers that cut long prompts silently need `opencodeHub.direct.maxContextTokens`.
 - A new session does not remember earlier ones on its own. Use `/context` to bring one in, or keep lasting instructions in the files your engine reads (`AGENTS.md`, `CLAUDE.md`).
 - Sharing, undo and compaction are available where the engine has them (opencode has all three).
@@ -562,7 +564,13 @@ See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for how the pieces fit together
 
 ## Releasing and maintaining
 
-Publish a GitHub release with a tag `vX.Y.Z` that matches `version` in `package.json`. The release workflow tests, packages and attaches the `.vsix`, and publishes to the Visual Studio Marketplace and Open VSX when they are set up. [docs/MAINTAINING.md](docs/MAINTAINING.md) covers the one-time Marketplace set-up, where to see how many people use the extension, and the Claude agent that fixes issues.
+Releases are automatic; nobody tags or drafts one by hand.
+
+1. A change that users will notice raises the version (`npm version patch --no-git-tag-version`, or `minor` for a feature) and puts its notes under a `## vX.Y.Z` heading at the top of [CHANGELOG.md](CHANGELOG.md). A unit test fails when the two disagree.
+2. When CI is green on `main` and that version has no release yet, the **Release** workflow creates the tag, builds the `.vsix`, writes the GitHub release from the changelog section, attaches the file and its checksum, and publishes to the Visual Studio Marketplace and Open VSX when they are set up. A push that keeps the version releases nothing.
+3. Every Monday the **Model prices** workflow regenerates the list prices behind the cost estimates and, when something changed, commits a patch version that is released the same way.
+
+[docs/MAINTAINING.md](docs/MAINTAINING.md) has the details, the one-time Marketplace set-up, where to see how many people use the extension, and the Claude agent that fixes issues.
 
 ## Licence
 

@@ -1143,7 +1143,9 @@ await test('questions: one at a time, with an answer of your own', async () => {
   // Last question has no options: the answer box has the cursor, and the button sends everything.
   await t.page.waitForFunction(() => document.querySelector('.question-card .request-title')?.textContent === 'What should the service be called?');
   assert.equal((await t.page.$$('.question-card .option')).length, 0);
-  assert.equal(await t.page.$eval('.question-input', (el) => [el.placeholder, document.activeElement === el].join('|')), 'Type your answer|true');
+  assert.equal(await t.page.$eval('.question-input', (el) => el.placeholder), 'Type your answer');
+  // (The cursor moves there just after the question is drawn.)
+  await t.page.waitForFunction(() => document.activeElement === document.querySelector('.question-input'));
   assert.deepEqual(await buttons(), [['Back', false], ['Send answers', true], ['Skip all', false]]);
   await t.page.keyboard.type('  ledger  ');
   await t.page.click('.question-card .btn.primary');

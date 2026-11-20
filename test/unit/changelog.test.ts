@@ -6,7 +6,8 @@ const root = path.join(__dirname, '..', '..');
 const changelog = readFileSync(path.join(root, 'CHANGELOG.md'), 'utf8');
 const pkg = JSON.parse(readFileSync(path.join(root, 'package.json'), 'utf8')) as { version: string };
 const lock = JSON.parse(readFileSync(path.join(root, 'package-lock.json'), 'utf8')) as { version: string; packages: Record<string, { version?: string }> };
-const headings = changelog.split('\n').filter((l) => l.startsWith('## '));
+// (A Windows checkout may have CRLF line ends.)
+const headings = changelog.split(/\r?\n/).filter((l) => l.startsWith('## '));
 
 /**
  * The Release workflow releases whatever `version` says once CI is green, and takes the notes

@@ -46,6 +46,60 @@ describe('ClaudeStreamTranslator', () => {
     expect(t.error).toBeUndefined();
   });
 
+  // Captured from Claude Code 2.1.330 against a server that bills every model call 100 new,
+  // 20 cached and 30 output tokens: a turn of two calls, then a second turn of one call on the
+  // resumed session. The tokens of a result are the turn's; its cost is the conversation's.
+  const call = { input_tokens: 100, output_tokens: 1, cache_read_input_tokens: 20, cache_creation_input_tokens: 0 };
+  const twoCalls = [
+    { type: 'system', subtype: 'init', session_id: 'sess-1', model: 'claude-opus-5-5' },
+    se({ type: 'message_start', message: { id: 'msg_1', usage: call } }),
+    se({ type: 'message_delta', delta: { stop_reason: 'tool_use' }, usage: { output_tokens: 30 } }),
+    se({ type: 'message_start', message: { id: 'msg_2', usage: call } }),
+    se({ type: 'message_delta', delta: { stop_reason: 'end_turn' }, usage: { output_tokens: 30 } }),
+    { type: 'result', subtype: 'success', is_error: false, result: 'ok', session_id: 'sess-1', total_cost_usd: 0.002008, usage: { input_tokens: 200, output_tokens: 60, cache_read_input_tokens: 40, cache_creation_input_tokens: 0 }, modelUsage: { 'claude-opus-5-5': { inputTokens: 200, outputTokens: 60, cacheReadInputTokens: 40, cacheCreationInputTokens: 0, costUSD: 0.002008 } } },
+  ];
+  const resumed = [
+    { type: 'system', subtype: 'init', session_id: 'sess-1', model: 'claude-opus-5-5' },
+    se({ type: 'message_start', message: { id: 'msg_3', usage: call } }),
+    se({ type: 'message_delta', delta: { stop_reason: 'end_turn' }, usage: { output_tokens: 30 } }),
+    { type: 'result', subtype: 'success', is_error: false, result: 'ok', session_id: 'sess-1', total_cost_usd: 0.003012, usage: { input_tokens: 100, output_tokens: 30, cache_read_input_tokens: 20, cache_creation_input_tokens: 0 }, modelUsage: { 'claude-opus-5-5': { inputTokens: 300, outputTokens: 90, cacheReadInputTokens: 60, cacheCreationInputTokens: 0, costUSD: 0.003012 } } },
+  ];
+
+  it('counts the model calls of a turn and the context after the last one', () => {
+    const { w } = writer();
+    const t = new ClaudeStreamTranslator(w);
+    for (const ev of twoCalls) t.handle(ev);
+    // Usage adds the two calls up; the context is what one call read and wrote.
+    expect(w.usage).toEqual({ input: 200, output: 60, reasoning: 0, cacheRead: 40, cacheWrite: 0, cost: 0.002008 });
+    expect(w.context).toEqual({ tokens: 150, calls: 2 });
+    expect(t.costTotal).toBe(0.002008);
+  });
+
+  it('charges a reply on a resumed session its own cost, not the conversation\'s so far', () => {
+    const { w } = writer();
+    const t = new ClaudeStreamTranslator(w, 0.002008);
+    for (const ev of resumed) t.handle(ev);
+    expect(w.usage).toMatchObject({ input: 100, output: 30, cacheRead: 20 });
+    expect(w.usage.cost).toBeCloseTo(0.001004, 9);
+    expect(w.context).toEqual({ tokens: 150, calls: 1 });
+    // What the conversation has cost by now, to subtract from the next turn.
+    expect(t.costTotal).toBe(0.003012);
+  });
+
+  it('takes the cost as the turn\'s own when the result does not reach back before it', () => {
+    // A CLI that reported per-turn costs would show the same tokens in `usage` and `modelUsage`.
+    const { w } = writer();
+    const t = new ClaudeStreamTranslator(w, 0.002008);
+    const ownOnly = { ...resumed[3], total_cost_usd: 0.0025, modelUsage: { 'claude-opus-5-5': { inputTokens: 100, outputTokens: 30, cacheReadInputTokens: 20, cacheCreationInputTokens: 0 } } };
+    for (const ev of [...resumed.slice(0, 3), ownOnly]) t.handle(ev);
+    expect(w.usage.cost).toBe(0.0025);
+    // And a first turn is never reduced.
+    const first = writer();
+    const t1 = new ClaudeStreamTranslator(first.w);
+    for (const ev of resumed) t1.handle(ev);
+    expect(first.w.usage.cost).toBe(0.003012);
+  });
+
   it('uses complete assistant messages when partial events are not available', () => {
     const { message, w } = writer();
     const t = new ClaudeStreamTranslator(w);
@@ -130,6 +184,24 @@ describe('CodexStreamTranslator', () => {
     // input includes cached tokens and output includes reasoning in Codex's report; buckets are exclusive here.
     expect(w.usage).toEqual({ input: 100, output: 26, reasoning: 4, cacheRead: 20, cacheWrite: 0, cost: 0 });
     expect(t.finished).toBe(true);
+  });
+
+  it('gives a turn on a resumed thread only what it used itself', () => {
+    // `codex exec resume` reports the thread's running total (codex-cli 0.171): three equal turns.
+    const totals = [
+      { input_tokens: 120, cached_input_tokens: 20, cache_write_input_tokens: 0, output_tokens: 30, reasoning_output_tokens: 0 },
+      { input_tokens: 240, cached_input_tokens: 40, cache_write_input_tokens: 0, output_tokens: 60, reasoning_output_tokens: 0 },
+      { input_tokens: 360, cached_input_tokens: 60, cache_write_input_tokens: 0, output_tokens: 90, reasoning_output_tokens: 0 },
+    ];
+    let before: CodexStreamTranslator['totals'];
+    for (const usage of totals) {
+      const { w } = writer();
+      const t = new CodexStreamTranslator(w, before);
+      t.handle({ type: 'turn.completed', usage });
+      expect(w.usage).toEqual({ input: 100, output: 30, reasoning: 0, cacheRead: 20, cacheWrite: 0, cost: 0 });
+      before = t.totals;
+    }
+    expect(before).toEqual({ input: 360, cached: 60, cacheWrite: 0, output: 90, reasoning: 0 });
   });
 
   it('reports failed turns and stream errors', () => {

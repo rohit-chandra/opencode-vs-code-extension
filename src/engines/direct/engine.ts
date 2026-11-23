@@ -8,6 +8,7 @@ import { estimateCost } from '../../core/usageLedger';
 import type { McpManager, McpTool } from '../../mcp/manager';
 import { toEffortLevels } from '../../shared/effort';
 import { ASK_USER_TOOL } from '../../shared/questions';
+import { totalTokens } from '../../shared/types';
 import type { EffortLevel, EngineCapabilities, McpServerInfo, ModelInfo, ModelRef, ProviderInfo } from '../../shared/types';
 import { dropOldestTurns, isContextOverflow, startForBudget } from './context';
 import { resolveProvider, secretKeyFor } from './presets';
@@ -263,6 +264,7 @@ export class DirectEngine extends LocalEngine {
       }
       const usage = result.usage;
       assistant.addUsage({ ...usage, cost: usage.cost || estimateCost(usage, pricing) });
+      assistant.modelCall(totalTokens(usage));
 
       const reply: WireBlock[] = [];
       if (result.text) reply.push({ type: 'text', text: result.text });

@@ -16,10 +16,12 @@ import { buildIssueUrl, diagnosticsMarkdown, feedbackKind, osLabel } from '../sh
 import { effortLabel, isCostlyEffort, matchEffort, resolveEffort } from '../shared/effort';
 import type { EnvironmentInfo, FeedbackKind } from '../shared/feedback';
 import type { AvatarStyle, HostToWebview, ViewState, WebviewToHost } from '../shared/protocol';
+import { previewPrompt } from '../shared/htmlPreview';
 import { applyMessageEvent, messageText } from '../shared/reducer';
+import { MAX_AHEAD, MINUTE, parseWhen, untilLabel, whenLabel } from '../shared/sendLater';
 import { ENGINE_LABELS } from '../shared/types';
 import { approvalMode } from '../shared/types';
-import type { AgentInfo, ApprovalMode, Attachment, AuthStatus, ChatMessage, EngineEvent, EngineId, ModelInfo, ModelRef, PromptInput, ProviderInfo, SessionInfo, SlashCommand } from '../shared/types';
+import type { AgentInfo, ApprovalMode, Attachment, AuthStatus, ChatMessage, EngineEvent, EngineId, ModelInfo, ModelRef, PromptInput, ProviderInfo, ScheduledMessage, SessionInfo, SlashCommand } from '../shared/types';
 
 export interface PickItem<T> {
   label: string;
@@ -65,6 +67,11 @@ export interface ControllerHost {
   /** `owner/repo` on GitHub where feedback is filed, from the extension's package.json. */
   repository(): string | undefined;
 }
+
+/** Where the scheduled messages of a workspace are kept (VS Code's own storage, on this machine). */
+const SCHEDULE_KEY = 'sendLater';
+const MAX_SCHEDULED = 50;
+const MAX_SCHEDULED_INLINE = 1024 * 1024;
 
 const EMPTY_CAPS = { agents: false, fork: false, share: false, undo: false, compact: false, images: false, mcpToggle: false, permissions: false, providerAuth: false, remoteSessions: false };
 
@@ -128,10 +135,12 @@ export class ChatController {
       attachments: [],
       permissions: [],
       questions: [],
+      scheduled: [],
       sessionUsage: undefined,
       usage: undefined,
       avatar: { enabled: host.config<boolean>('avatar.enabled', true), style: avatarStyle(host.config<string>('avatar.style', 'buddy')) },
       zoom: clampZoom(host.config<number>('chat.zoom', 1)),
+      htmlPreview: host.config<boolean>('chat.htmlPreview', true) !== false,
       providerColors: host.config<boolean>('chat.providerColors', true) !== false,
       activeFile: undefined,
       trusted: host.workspaceTrusted(),
@@ -147,6 +156,8 @@ export class ChatController {
     };
     for (const [id, e] of engines) this.subscriptions.push(e.onEvent((ev) => this.onEngineEvent(id, ev)));
     this.subscriptions.push(this.ledger.onDidChange(() => this.debounce('usage', 250, () => this.pushUsage())));
+    this.state.scheduled = this.loadScheduled();
+    this.armScheduler();
   }
 
   /* ------------------------------------------------------------- lifecycle */
@@ -191,6 +202,8 @@ export class ChatController {
     else this.set({ sessionId: undefined, messages: [], permissions: [], questions: [], activity: 'idle' });
     this.set({ loading: false });
     this.pushUsage();
+    // Messages whose time came while the chat was not running.
+    this.debounce('sendLater', 800, () => void this.deliverDue());
   }
 
   /** Resolves once what the controller saves in the background (the model lists) is on disk. */
@@ -202,6 +215,9 @@ export class ChatController {
     for (const s of this.subscriptions) s.dispose();
     for (const t of this.timers.values()) clearTimeout(t);
     if (this.eventTimer) clearTimeout(this.eventTimer);
+    if (this.scheduleTimer) clearTimeout(this.scheduleTimer);
+    this.scheduleTimer = undefined;
+    this.disposed = true;
     this.stopSignInWait();
   }
 
@@ -480,8 +496,11 @@ export class ChatController {
         const last = this.state.messages[this.state.messages.length - 1];
         // A turn that was stopped, or ended in an error, can be sent again with one click.
         const canRetry = ended ? this.stopRequested || (last?.role === 'assistant' && !!last.error) : event.activity === 'idle' ? this.state.canRetry : false;
+        // Messages queued behind a reply the user stopped wait for the user: stop means stop.
+        if (ended && this.stopRequested) this.holdDue('You stopped the reply it was waiting for.');
         if (ended) this.stopRequested = false;
         this.set({ activity: event.activity, activityDetail: event.detail, canRetry });
+        if (ended) this.debounce('sendLater', 500, () => void this.deliverDue());
         // A failed reply may mean the login expired: show the sign-in prompt if so.
         if (ended && last?.role === 'assistant' && last.error && this.engine.account) void this.refreshAuth();
         // A long-lived window: look for new models now and then, when a reply has just finished.
@@ -767,42 +786,37 @@ export class ChatController {
   /* ---------------------------------------------------------------- send */
 
   async send(rawText: string): Promise<void> {
+    const failed = await this.trySend(rawText);
+    if (failed) this.notify(failed.level, failed.text);
+  }
+
+  /** Send a message. Returns why it could not be handed to the engine, or undefined when it was. */
+  private async trySend(rawText: string): Promise<{ level: 'warn' | 'error'; text: string } | undefined> {
     const text = rawText.trim();
-    if (!text && this.state.attachments.length === 0) return;
+    if (!text && this.state.attachments.length === 0) return undefined;
     const slash = parseSlash(text);
     if (slash && isBuiltin(slash.name)) {
       await this.runBuiltin(slash.name, slash.args);
-      return;
+      return undefined;
     }
-    if (!this.host.workspaceTrusted()) {
-      this.notify('warn', 'Chat is disabled in untrusted workspaces because agents can run tools here. Trust the workspace to continue.');
-      return;
-    }
+    if (!this.host.workspaceTrusted()) return { level: 'warn', text: 'Chat is disabled in untrusted workspaces because agents can run tools here. Trust the workspace to continue.' };
     const engine = this.engine;
     if (engine.status().state !== 'ready') {
       const status = await engine.start();
-      if (status.state !== 'ready') {
-        this.notify('error', status.detail ?? `${ENGINE_LABELS[engine.id]} is not available.`);
-        return;
-      }
+      if (status.state !== 'ready') return { level: 'error', text: status.detail ?? `${ENGINE_LABELS[engine.id]} is not available.` };
       await this.activate();
     }
-    if (this.state.activity !== 'idle') {
-      this.notify('warn', 'Still working on the previous message. Stop it first (/stop) or wait.');
-      return;
-    }
+    if (this.state.activity !== 'idle') return { level: 'warn', text: 'Still working on the previous message. Stop it first (/stop), wait, or send this one later (the clock next to Send).' };
     if (engine.account && this.state.auth?.signedIn === false) {
       const account = engine.account;
-      this.notify('warn', account.mode() === 'apiKey' ? `Add an API key for ${ENGINE_LABELS[engine.id]} first, or sign in with your ${account.accountName} account (/login).` : `Sign in with your ${account.accountName} account first (/login).`);
-      return;
+      return { level: 'warn', text: account.mode() === 'apiKey' ? `Add an API key for ${ENGINE_LABELS[engine.id]} first, or sign in with your ${account.accountName} account (/login).` : `Sign in with your ${account.accountName} account first (/login).` };
     }
     if (!this.state.model) await this.refreshCatalog();
     if (!this.state.model) {
-      this.notify('warn', engine.id === 'direct' || engine.id === 'opencode' ? 'No model available. Use /providers to sign in with a subscription (or add an API key), then pick a model.' : 'No model available for this engine.');
-      return;
+      return { level: 'warn', text: engine.id === 'direct' || engine.id === 'opencode' ? 'No model available. Use /providers to sign in with a subscription (or add an API key), then pick a model.' : 'No model available for this engine.' };
     }
     const sessionId = await this.ensureSession();
-    if (!sessionId) return;
+    if (!sessionId) return { level: 'error', text: 'Could not create a session.' };
     const input: PromptInput = { text, attachments: this.state.attachments, model: this.state.model, agent: this.state.agent, effort: resolveEffort(this.state.effort, this.currentModel()) };
     this.stopRequested = false;
     this.set({ attachments: [], activity: 'busy', activityDetail: undefined, canRetry: false });
@@ -810,10 +824,191 @@ export class ChatController {
       const engineCommand = slash && this.state.commands.find((c) => c.name === slash.name && c.source !== 'builtin');
       if (slash && engineCommand) await engine.runCommand(sessionId, slash.name, slash.args, input);
       else await engine.sendPrompt(sessionId, input);
+      return undefined;
     } catch (err) {
       this.set({ activity: 'idle', attachments: input.attachments });
-      this.notify('error', errorMessage(err));
+      return { level: 'error', text: errorMessage(err) };
     }
+  }
+
+  /* ----------------------------------------------------------- send later */
+
+  private scheduleTimer: ReturnType<typeof setTimeout> | undefined;
+  private delivering = false;
+  private disposed = false;
+  /** How often a message whose time has come is tried again while the chat is not free (the tests shorten it). */
+  scheduleRetryMs = 20_000;
+
+  /** Scheduled messages of this workspace, from the last time VS Code ran. */
+  private loadScheduled(): ScheduledMessage[] {
+    const saved = this.host.state.get<ScheduledMessage[]>(SCHEDULE_KEY);
+    if (!Array.isArray(saved)) return [];
+    const now = Date.now();
+    const sendMissed = this.host.config<boolean>('chat.sendLater.sendMissed', true) !== false;
+    return saved
+      .filter((m) => m && typeof m.id === 'string' && typeof m.text === 'string' && Number.isFinite(m.sendAt) && this.engines.has(m.engine))
+      .map((m) => ({ ...m, attachments: Array.isArray(m.attachments) ? m.attachments : [], held: m.held || (!sendMissed && m.sendAt < now - 2 * MINUTE) || undefined }))
+      .sort((a, b) => a.sendAt - b.sendAt);
+  }
+
+  private saveScheduled(list: ScheduledMessage[]): void {
+    const scheduled = [...list].sort((a, b) => a.sendAt - b.sendAt || a.createdAt - b.createdAt);
+    this.set({ scheduled });
+    void Promise.resolve(this.host.state.update(SCHEDULE_KEY, scheduled)).catch((e) => this.host.log.warn(`Could not save scheduled messages: ${errorMessage(e)}`));
+    this.armScheduler();
+  }
+
+  /** Wake up when the next message is due, or soon again while one is waiting for the chat to be free. */
+  private armScheduler(): void {
+    if (this.scheduleTimer) clearTimeout(this.scheduleTimer);
+    this.scheduleTimer = undefined;
+    if (this.disposed) return;
+    const now = Date.now();
+    const waiting = this.state.scheduled.filter((m) => !m.held && !m.problem);
+    if (waiting.length === 0) return;
+    const next = Math.min(...waiting.map((m) => m.sendAt));
+    // setTimeout cannot wait longer than about 24 days; it simply arms itself again.
+    const wait = next <= now ? this.scheduleRetryMs : Math.min(next - now, 2_000_000_000);
+    this.scheduleTimer = setTimeout(() => void this.deliverDue(), wait);
+  }
+
+  /**
+   * Schedule the message in the box (with its attachments, model, agent and effort) for `at`.
+   * A time that is not in the future means "as soon as the chat is free": while a reply is
+   * being written, that queues the message behind it.
+   */
+  async schedule(rawText: string, at: number): Promise<void> {
+    const text = rawText.trim();
+    if (!text && this.state.attachments.length === 0) return;
+    if (!this.host.workspaceTrusted()) return this.notify('warn', 'Chat is disabled in untrusted workspaces. Trust the workspace to schedule messages.');
+    const now = Date.now();
+    if (!Number.isFinite(at)) return this.notify('warn', 'Pick a time to send the message.');
+    if (at - now > MAX_AHEAD) return this.notify('warn', 'That is more than 60 days away. Pick a time closer to now.');
+    if (this.state.scheduled.length >= MAX_SCHEDULED) return this.notify('warn', `There are already ${MAX_SCHEDULED} scheduled messages. Send or cancel some first.`);
+    const attachments = this.state.attachments;
+    // Pasted content travels with the message; large pastes would bloat VS Code's own storage.
+    const inline = attachments.reduce((n, a) => n + (a.dataUrl?.length ?? 0) + (a.path ? 0 : (a.text?.length ?? 0)), 0);
+    if (inline > MAX_SCHEDULED_INLINE) return this.notify('warn', 'The pasted content is too large to keep for later (over 1 MB). Save it as a file and attach the file instead.');
+    const session = this.state.sessions.find((s) => s.id === this.state.sessionId);
+    const item: ScheduledMessage = {
+      id: newId('later'),
+      engine: this.state.engine,
+      sessionId: this.state.sessionId,
+      sessionTitle: session?.title,
+      text,
+      attachments,
+      model: this.state.model,
+      agent: this.state.agent,
+      effort: this.state.effort,
+      sendAt: Math.max(at, now),
+      createdAt: now,
+    };
+    const soon = at <= now;
+    this.set({ attachments: [] });
+    this.saveScheduled([...this.state.scheduled, item]);
+    this.notify('info', soon ? (this.state.activity === 'idle' ? 'Sending it now.' : 'It will be sent when this reply is done.') : `Scheduled for ${whenLabel(item.sendAt, now)} (${untilLabel(item.sendAt, now)}). VS Code has to be open then.`);
+    if (soon) await this.deliverDue();
+  }
+
+  cancelScheduled(id: string): void {
+    if (this.state.scheduled.some((m) => m.id === id)) this.saveScheduled(this.state.scheduled.filter((m) => m.id !== id));
+  }
+
+  rescheduleScheduled(id: string, at: number): void {
+    const now = Date.now();
+    if (!Number.isFinite(at) || at - now > MAX_AHEAD) return this.notify('warn', 'Pick a time within the next 60 days.');
+    if (!this.state.scheduled.some((m) => m.id === id)) return;
+    this.saveScheduled(this.state.scheduled.map((m) => (m.id === id ? { ...m, sendAt: Math.max(at, now), held: undefined, problem: undefined } : m)));
+    if (at <= now) void this.deliverDue();
+  }
+
+  /** Send a scheduled message without waiting for its time (it still waits for a reply in progress). */
+  async sendScheduledNow(id: string): Promise<void> {
+    if (!this.state.scheduled.some((m) => m.id === id)) return;
+    this.saveScheduled(this.state.scheduled.map((m) => (m.id === id ? { ...m, sendAt: Date.now(), held: undefined, problem: undefined } : m)));
+    if (this.state.activity !== 'idle') this.notify('info', 'It will be sent when this reply is done.');
+    await this.deliverDue();
+  }
+
+  /** Put a scheduled message back into the message box, with its attachments, to change it. */
+  editScheduled(id: string): void {
+    const item = this.state.scheduled.find((m) => m.id === id);
+    if (!item) return;
+    this.saveScheduled(this.state.scheduled.filter((m) => m.id !== id));
+    if (item.attachments.length) this.set({ attachments: [...this.state.attachments, ...item.attachments.filter((a) => !this.state.attachments.some((x) => x.id === a.id))] });
+    this.host.post({ type: 'insertText', text: item.text });
+  }
+
+  /** Messages that are due right now stop waiting for the chat and wait for the user instead. */
+  private holdDue(problem: string): void {
+    const now = Date.now();
+    if (!this.state.scheduled.some((m) => m.sendAt <= now && !m.held && !m.problem)) return;
+    this.saveScheduled(this.state.scheduled.map((m) => (m.sendAt <= now && !m.held && !m.problem ? { ...m, problem } : m)));
+  }
+
+  /**
+   * Send what is due, one message at a time: each one opens its conversation and is sent
+   * as if the user had pressed Send, so approvals and questions work as usual. While a
+   * reply is being written nothing is sent; the end of that reply calls this again.
+   */
+  private async deliverDue(): Promise<void> {
+    if (this.delivering || this.disposed) return;
+    this.delivering = true;
+    try {
+      for (;;) {
+        const now = Date.now();
+        const next = this.state.scheduled.find((m) => m.sendAt <= now && !m.held && !m.problem);
+        if (!next) return;
+        const outcome = await this.deliver(next);
+        // Sent: the chat is busy now, and the rest follows when it is free again.
+        if (outcome !== 'failed') return;
+      }
+    } catch (err) {
+      this.host.log.error(`Send later failed: ${errorMessage(err)}`);
+    } finally {
+      this.delivering = false;
+      this.armScheduler();
+    }
+  }
+
+  private async deliver(item: ScheduledMessage): Promise<'sent' | 'wait' | 'failed'> {
+    if (!this.host.workspaceTrusted() || this.state.loading || this.state.activity !== 'idle') return 'wait';
+    const fail = (problem: string): 'failed' => {
+      this.saveScheduled(this.state.scheduled.some((m) => m.id === item.id) ? this.state.scheduled.map((m) => (m.id === item.id ? { ...m, problem } : m)) : [...this.state.scheduled, { ...item, problem }]);
+      this.notify('warn', `A scheduled message could not be sent: ${problem} It is kept under Scheduled.`);
+      return 'failed';
+    };
+    // What the user has in the message box right now stays theirs.
+    const composing = this.state.attachments;
+    if (item.engine !== this.state.engine) await this.setEngine(item.engine);
+    const status = this.engine.status();
+    if (this.state.engine !== item.engine || status.state !== 'ready') return fail(status.detail ?? `${ENGINE_LABELS[item.engine]} is not available.`);
+    let note = '';
+    if (item.sessionId && this.state.sessionId !== item.sessionId) {
+      if (this.state.sessions.some((s) => s.id === item.sessionId)) await this.openSession(item.sessionId);
+      else {
+        await this.newSession();
+        note = ' Its conversation no longer exists, so it started a new one.';
+      }
+    } else if (!item.sessionId && this.state.sessionId) {
+      await this.newSession();
+    }
+    // The conversation it belongs to is still replying (it was started from another window, or by the engine).
+    if (this.state.activity !== 'idle') return 'wait';
+    if (item.model && findModel(this.state.providers, item.model) && (this.state.model?.providerId !== item.model.providerId || this.state.model?.modelId !== item.model.modelId)) await this.setModel(item.model);
+    if (item.agent && item.agent !== this.state.agent && this.state.agents.some((a) => a.name === item.agent)) await this.setAgent(item.agent);
+    if (item.effort !== this.state.effort && (!item.effort || this.currentModel()?.efforts?.some((e) => e.id === item.effort))) await this.setEffort(item.effort);
+    // Off the list before it is sent, so nothing can send it twice.
+    this.saveScheduled(this.state.scheduled.filter((m) => m.id !== item.id));
+    this.set({ attachments: item.attachments });
+    const failed = await this.trySend(item.text);
+    if (failed) {
+      this.set({ attachments: composing });
+      return fail(failed.text);
+    }
+    if (composing.length) this.set({ attachments: composing });
+    this.notify('info', `Sent your scheduled message${item.sessionTitle && !note ? ` in "${item.sessionTitle}"` : ''}.${note}`);
+    return 'sent';
   }
 
   async abort(): Promise<void> {
@@ -872,6 +1067,19 @@ export class ChatController {
       }
       case 'stop':
         return this.abort();
+      case 'later': {
+        if (!args) {
+          const n = this.state.scheduled.length;
+          return this.notify('info', `${n ? `${n} scheduled ${n === 1 ? 'message' : 'messages'}, listed above the message box. ` : ''}Send a message later with /later <when> <message>, for example: /later 30m run the tests · /later 14:30 … · /later tomorrow 9am … · /later next … (after this reply).`);
+        }
+        const when = parseWhen(args, Date.now());
+        if ('error' in when) return this.notify('warn', when.error);
+        if (!when.text && this.state.attachments.length === 0) return this.notify('warn', 'Add the message after the time, for example: /later 30m run the tests');
+        return this.schedule(when.text, when.at);
+      }
+      case 'preview':
+        if (!args) return this.notify('info', 'Ask for a visual answer with /preview <request>, for example: /preview a chart of the test durations in this repo. The reply is drawn in the chat: HTML, CSS, tables and inline SVG, without scripts or anything from the network.');
+        return this.send(previewPrompt(args));
       case 'attach':
         return this.pickFiles();
       case 'context':
@@ -1038,7 +1246,7 @@ export class ChatController {
 
   /** Settings changed outside the chat view. */
   onConfigChanged(providersChanged = true): void {
-    this.set({ avatar: { enabled: this.host.config<boolean>('avatar.enabled', true), style: avatarStyle(this.host.config<string>('avatar.style', 'buddy')) }, zoom: clampZoom(this.host.config<number>('chat.zoom', 1)), providerColors: this.host.config<boolean>('chat.providerColors', true) !== false, trusted: this.host.workspaceTrusted(), approvals: approvalMode(this.host.config<string>('approvals', 'ask')) });
+    this.set({ avatar: { enabled: this.host.config<boolean>('avatar.enabled', true), style: avatarStyle(this.host.config<string>('avatar.style', 'buddy')) }, zoom: clampZoom(this.host.config<number>('chat.zoom', 1)), htmlPreview: this.host.config<boolean>('chat.htmlPreview', true) !== false, providerColors: this.host.config<boolean>('chat.providerColors', true) !== false, trusted: this.host.workspaceTrusted(), approvals: approvalMode(this.host.config<string>('approvals', 'ask')) });
     if (providersChanged && (this.state.engine === 'direct' || this.state.engine === 'vscode-lm')) this.debounce('config', 400, () => void this.restartEngine());
   }
 
@@ -1468,6 +1676,16 @@ export class ChatController {
         return;
       case 'send':
         return this.send(msg.text);
+      case 'schedule':
+        return this.schedule(String(msg.text ?? ''), Number(msg.at));
+      case 'scheduledSendNow':
+        return this.sendScheduledNow(msg.id);
+      case 'scheduledReschedule':
+        return this.rescheduleScheduled(msg.id, Number(msg.at));
+      case 'scheduledCancel':
+        return this.cancelScheduled(msg.id);
+      case 'scheduledEdit':
+        return this.editScheduled(msg.id);
       case 'abort':
         return this.abort();
       case 'retry':
@@ -1539,6 +1757,9 @@ export class ChatController {
         return this.host.copy(msg.text);
       case 'insertCode':
         return this.host.insertIntoEditor(msg.text);
+      case 'saveHtml':
+        if (typeof msg.html === 'string' && msg.html.length < 5_000_000) await this.guard('Could not save the preview', () => this.host.saveText('preview.html', msg.html));
+        return;
       case 'setAvatar':
         return this.setAvatar(msg);
       case 'moveView':

@@ -5,14 +5,18 @@ import type { EngineAccount, EngineContext } from '../../core/engine';
 import { EngineError } from '../../core/engine';
 import { LocalEngine } from '../../core/localEngine';
 import type { Turn } from '../../core/localEngine';
+import { listedModels } from '../../core/listPrices';
 import { findExecutable, runCapture, terminalCommand } from '../../core/process';
-import type { AuthMode, AuthStatus, EngineCapabilities, McpServerInfo, ModelInfo, ModelRef, PermissionReply, PromptInput, ProviderInfo, SlashCommand } from '../../shared/types';
+import type { StoredSession } from '../../core/localSessions';
+import type { AuthMode, AuthStatus, ChatMessage, EngineCapabilities, McpServerInfo, ModelInfo, ModelRef, PermissionReply, PromptInput, ProviderInfo, SlashCommand } from '../../shared/types';
 import { FreshList } from './freshList';
-import { claudeInitInfo, claudeModelInfo } from './modelDiscovery';
+import { claudeInitInfo, claudeModelInfo, claudeVersions } from './modelDiscovery';
+import type { ClaudeVersion } from './modelDiscovery';
 import { apiKeySecret, authMode, claudeEnv, parseClaudeAuthStatus, shellExe } from './auth';
 import { APPROVER_SERVER, APPROVER_TOOL, ClaudeApprover } from './claudeApprover';
 import { ClaudeStreamTranslator } from './claudeStream';
 import { StateFile, imageBase64, promptForAgent, readJsonFile, runJsonl } from './common';
+import { repairClaudeCosts } from './usageRepair';
 
 interface ClaudeState {
   slashCommands: string[];
@@ -22,25 +26,44 @@ interface ClaudeState {
 
 type McpDefs = Record<string, { command?: string; args?: string[]; url?: string; type?: string; [k: string]: unknown }>;
 
-/** Used only when the CLI cannot report the account's models. */
-/** The model families Claude Code always has an alias for (it resolves each to the newest version). */
+/** The model families Claude Code always has an alias for (it resolves each to the newest version it knows). */
 const FAMILY_ALIASES = ['fable', 'opus', 'sonnet', 'haiku'];
 
 /**
  * Models Claude Code accepts with `--model` but leaves out of the list it reports for some
- * accounts. They are offered after the account's own list, so every Claude model family can
- * be picked; one that the plan does not include answers with Anthropic's own message.
+ * accounts. They are offered after the account's own list, so every Claude model can be
+ * picked; one that the plan does not include answers with Anthropic's own message.
+ *
+ * Each is offered by its full id and real name ("Opus 5.5", `claude-opus-5-5`) from the
+ * catalogue that ships with the extension, newest first: the name then says which version
+ * runs, and it runs that version whatever an older CLI takes a bare `opus` to mean. A family
+ * the catalogue does not have yet keeps its alias.
  */
-function moreModels(listed: ModelInfo[], reported: boolean): ModelInfo[] {
-  const has = (id: string) => listed.some((m) => m.modelId === id);
+export function moreModels(listed: ModelInfo[], reported: boolean, catalogue: ClaudeVersion[] = claudeVersions(listedModels('anthropic'))): ModelInfo[] {
+  const has = (id: string) => listed.some((m) => m.modelId === id || m.resolvedId === id);
   const cap = (id: string) => id.charAt(0).toUpperCase() + id.slice(1);
-  const out: ModelInfo[] = [];
-  for (const id of FAMILY_ALIASES) {
-    // When the CLI reported nothing at all (an older CLI), these are simply the standard aliases.
-    if (!has(id)) out.push({ providerId: 'claude-code', modelId: id, name: `${cap(id)} (latest)`, description: reported ? 'Not in the list Claude Code reports for your account. It may need a higher plan or usage credits' : undefined, supportsImages: true, supportsTools: true });
+  const base = { providerId: 'claude-code', supportsImages: true, supportsTools: true };
+  const missing = reported ? 'Not in the list Claude Code reports for your account. It may need a higher plan or usage credits' : undefined;
+  const newest: ModelInfo[] = [];
+  const earlier: ModelInfo[] = [];
+  const families = [...new Set([...FAMILY_ALIASES, ...catalogue.map((v) => v.family)])];
+  for (const family of families) {
+    const versions = catalogue.filter((v) => v.family === family);
+    if (versions.length === 0) {
+      // No version of this family is known here: its alias, which the CLI resolves itself.
+      if (!has(family)) newest.push({ ...base, modelId: family, name: `${cap(family)} (newest your Claude Code knows)`, description: missing });
+      continue;
+    }
+    versions.forEach((v, i) => {
+      if (has(v.id)) return;
+      // The account's own entry for the family (`opus`) already runs its newest version.
+      if (i === 0 && listed.some((m) => m.modelId === family && !m.resolvedId)) return;
+      if (i === 0) newest.push({ ...base, modelId: v.id, name: v.name, description: missing ?? `Newest ${cap(family)}` });
+      else earlier.push({ ...base, modelId: v.id, name: v.name, description: `Earlier ${cap(family)} version${reported ? '. Not every plan includes it' : ''}` });
+    });
   }
-  if (!has('opusplan')) out.push({ providerId: 'claude-code', modelId: 'opusplan', name: 'Opus Plan Mode', description: 'Opus while planning, Sonnet for the rest', supportsImages: true, supportsTools: true });
-  return out;
+  const plan: ModelInfo[] = has('opusplan') ? [] : [{ ...base, modelId: 'opusplan', name: 'Opus Plan Mode', description: 'Opus while planning, Sonnet for the rest' }];
+  return [...newest, ...plan, ...earlier];
 }
 
 /**
@@ -167,10 +190,11 @@ export class ClaudeCodeEngine extends LocalEngine {
     // Models the CLI did not list run through the same CLI, so they take the same effort levels.
     const efforts = models.find((m) => m.modelId === 'default')?.efforts ?? models.find((m) => m.efforts)?.efforts;
     const listed = models.length;
-    models.push(...moreModels(models, reported));
+    // Models the user added by name come right after the account's own, ahead of the catalogue's.
     for (const id of Array.isArray(extra) ? extra : []) {
-      if (typeof id === 'string' && id.trim() && !models.some((m) => m.modelId === id.trim() || m.resolvedId === id.trim())) models.push({ providerId: 'claude-code', modelId: id.trim(), name: id.trim(), description: 'Added by you', supportsImages: true, supportsTools: true });
+      if (typeof id === 'string' && id.trim() && !models.some((m) => m.modelId === id.trim() || m.resolvedId === id.trim())) models.push({ providerId: 'claude-code', modelId: id.trim(), name: claudeVersions([id.trim()])[0]?.name ?? id.trim(), description: 'Added by you', supportsImages: true, supportsTools: true });
     }
+    models.push(...moreModels(models, reported));
     if (efforts) for (const m of models.slice(listed)) m.efforts = efforts;
     return [{ id: 'claude-code', name: 'Claude Code', connected: true, models }];
   }
@@ -239,6 +263,17 @@ export class ClaudeCodeEngine extends LocalEngine {
     this.emit({ type: 'mcp.changed' });
   }
 
+  /** Opening a session saved by an earlier version puts its replies' cost right (see `usageRepair.ts`). */
+  override async getMessages(sessionId: string): Promise<ChatMessage[]> {
+    const session = await this.store.get(sessionId);
+    if (!session) return [];
+    if (!session.meta.costPerTurn && !this.isRunning(sessionId) && session.messages.some((m) => m.usage)) {
+      costSoFar(session);
+      await this.store.persist(sessionId).catch(() => undefined);
+    }
+    return session.messages;
+  }
+
   /* ------------------------------------------------------------------ turn */
 
   protected async runTurn(turn: Turn): Promise<void> {
@@ -284,7 +319,9 @@ export class ClaudeCodeEngine extends LocalEngine {
     if (strict) args.push('--strict-mcp-config');
     args.push('--mcp-config', mcpFile);
 
-    const translator = new ClaudeStreamTranslator(assistant);
+    // Claude Code reports a resumed conversation's cost from its first turn on; what it had
+    // reached is kept with the session, so each reply is charged only its own part.
+    const translator = new ClaudeStreamTranslator(assistant, resume ? costSoFar(session) : 0);
     try {
       const { code, stderr } = await runJsonl({
         file: this.exe,
@@ -308,7 +345,13 @@ export class ClaudeCodeEngine extends LocalEngine {
         session.meta.claudeSessionId = translator.init.sessionId;
         delete session.meta.forkPending;
       }
-      if (translator.init.model && turn.assistant.message.model?.modelId === 'default') {
+      if (translator.costTotal !== undefined) {
+        session.meta.claudeCostTotal = translator.costTotal;
+        session.meta.costPerTurn = true;
+      }
+      // The model that actually answered (`claude-opus-5-5`), not the alias that was asked for
+      // (`opus`, `default`): the reply's footer and the usage panel then name the real version.
+      if (translator.init.model && turn.assistant.message.model) {
         turn.assistant.message.model = { providerId: 'claude-code', modelId: translator.init.model };
       }
       const patch: Partial<ClaudeState> = {};
@@ -330,6 +373,22 @@ export class ClaudeCodeEngine extends LocalEngine {
       await fs.rm(mcpFile, { force: true }).catch(() => undefined);
     }
   }
+}
+
+/**
+ * What a Claude Code conversation had cost before the turn that is starting. Sessions from
+ * before this was tracked have no total; there the last reply's cost is it, because every
+ * reply used to be stored with the conversation's running total.
+ */
+function costSoFar(session: StoredSession): number {
+  if (!session.meta.costPerTurn) {
+    // The reply being written has no usage yet, so it is not touched.
+    const reached = repairClaudeCosts(session.messages);
+    session.meta.costPerTurn = true;
+    if (typeof session.meta.claudeCostTotal !== 'number') session.meta.claudeCostTotal = reached;
+  }
+  const kept = session.meta.claudeCostTotal;
+  return typeof kept === 'number' && kept >= 0 ? kept : 0;
 }
 
 /** One stream-json user message with text and image blocks. */

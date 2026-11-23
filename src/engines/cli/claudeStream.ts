@@ -9,6 +9,16 @@ export interface TurnSink {
   hasTool(callId: string): boolean;
   notice(level: 'info' | 'warn' | 'error', text: string): void;
   setUsage(usage: TokenUsage): void;
+  /** One model call finished: the tokens it read plus the tokens it wrote. Optional so test sinks can leave it out. */
+  modelCall?(tokens: number): void;
+}
+
+/** Token counters of one Anthropic API call, as its stream reports them. */
+interface CallUsage {
+  input_tokens?: number;
+  output_tokens?: number;
+  cache_read_input_tokens?: number;
+  cache_creation_input_tokens?: number;
 }
 
 export interface ClaudeInit {
@@ -44,8 +54,19 @@ export class ClaudeStreamTranslator {
   private currentMessageId: string | undefined;
   private sawText = false;
   private done = false;
+  /** Input side (fresh, cached, newly cached) of the model call in progress. */
+  private callInput: number | undefined;
+  /**
+   * `total_cost_usd` of the last result. Claude Code counts it for the whole conversation: a
+   * resumed session reports what every turn so far has cost, not only this one.
+   */
+  costTotal: number | undefined;
 
-  constructor(private readonly sink: TurnSink) {}
+  /**
+   * @param costBefore What the conversation had cost before this turn (the `costTotal` of
+   *   its previous turn), so a resumed session's reply is charged its own cost only.
+   */
+  constructor(private readonly sink: TurnSink, private readonly costBefore = 0) {}
 
   get finished(): boolean {
     return this.done;
@@ -87,9 +108,20 @@ export class ClaudeStreamTranslator {
   private onStreamEvent(e: Record<string, unknown> | undefined): void {
     if (!e) return;
     if (e.type === 'message_start') {
-      const id = (e.message as { id?: string } | undefined)?.id;
+      const message = e.message as { id?: string; usage?: CallUsage } | undefined;
+      const id = message?.id;
       this.currentMessageId = id;
       if (id) this.streamed.add(id);
+      const u = message?.usage;
+      this.callInput = u ? (u.input_tokens ?? 0) + (u.cache_read_input_tokens ?? 0) + (u.cache_creation_input_tokens ?? 0) : undefined;
+    } else if (e.type === 'message_delta') {
+      // The end of one model call: what it read plus what it wrote is the context so far.
+      const u = e.usage as CallUsage | undefined;
+      if (this.callInput !== undefined) {
+        const input = u?.input_tokens !== undefined ? u.input_tokens + (u.cache_read_input_tokens ?? 0) + (u.cache_creation_input_tokens ?? 0) : this.callInput;
+        this.sink.modelCall?.(Math.max(input, this.callInput) + (u?.output_tokens ?? 0));
+        this.callInput = undefined;
+      }
     } else if (e.type === 'content_block_start') {
       this.sink.breakText();
     } else if (e.type === 'content_block_delta') {
@@ -138,15 +170,19 @@ export class ClaudeStreamTranslator {
   private onResult(ev: Record<string, unknown>): void {
     this.done = true;
     if (typeof ev.session_id === 'string') this.init.sessionId = ev.session_id;
-    const u = ev.usage as { input_tokens?: number; output_tokens?: number; cache_read_input_tokens?: number; cache_creation_input_tokens?: number } | undefined;
+    const u = ev.usage as CallUsage | undefined;
     if (u) {
+      // The tokens are this turn's (every model call of it added up); the cost is the conversation's.
+      const total = typeof ev.total_cost_usd === 'number' && ev.total_cost_usd >= 0 ? ev.total_cost_usd : undefined;
+      this.costTotal = total;
+      const cumulative = total !== undefined && this.costBefore > 0 && total >= this.costBefore && coversEarlierTurns(ev.modelUsage, u);
       this.sink.setUsage({
         input: u.input_tokens ?? 0,
         output: u.output_tokens ?? 0,
         reasoning: 0,
         cacheRead: u.cache_read_input_tokens ?? 0,
         cacheWrite: u.cache_creation_input_tokens ?? 0,
-        cost: typeof ev.total_cost_usd === 'number' ? ev.total_cost_usd : 0,
+        cost: total === undefined ? 0 : cumulative ? total - this.costBefore : total,
       });
     }
     const resultText = typeof ev.result === 'string' ? ev.result : '';
@@ -157,6 +193,22 @@ export class ClaudeStreamTranslator {
       this.sink.text(resultText);
     }
   }
+}
+
+/**
+ * Whether a result's per-model totals reach back before this turn. `modelUsage` is counted
+ * for the conversation like the cost, `usage` for the turn alone, so on a resumed session the
+ * first holds more tokens than the second. Without `modelUsage` (older CLIs) the cost is
+ * taken to be the conversation's, which is how the CLI has reported it.
+ */
+function coversEarlierTurns(modelUsage: unknown, turn: CallUsage): boolean {
+  if (!modelUsage || typeof modelUsage !== 'object') return true;
+  let all = 0;
+  for (const m of Object.values(modelUsage as Record<string, { inputTokens?: number; outputTokens?: number; cacheReadInputTokens?: number; cacheCreationInputTokens?: number }>)) {
+    all += (m?.inputTokens ?? 0) + (m?.outputTokens ?? 0) + (m?.cacheReadInputTokens ?? 0) + (m?.cacheCreationInputTokens ?? 0);
+  }
+  const own = (turn.input_tokens ?? 0) + (turn.output_tokens ?? 0) + (turn.cache_read_input_tokens ?? 0) + (turn.cache_creation_input_tokens ?? 0);
+  return all > own;
 }
 
 function describeSubtype(subtype: string | undefined): string {

@@ -1,4 +1,6 @@
 import type { TurnSink } from './claudeStream';
+import { codexTotals, codexTurnUsage } from './usageRepair';
+import type { CodexTotals } from './usageRepair';
 
 interface CodexItem {
   id: string;
@@ -24,13 +26,19 @@ interface CodexItem {
  *   thread.started, turn.started, item.started|updated|completed, turn.completed (usage),
  *   turn.failed, error.
  * Codex reports whole items rather than token deltas.
+ *
+ * The usage of `turn.completed` is the thread's running total, not the turn's: a resumed
+ * thread reports every earlier turn again. `before` is what the thread had reached when the
+ * turn started, so the reply is given only what it used itself.
  */
 export class CodexStreamTranslator {
   threadId: string | undefined;
   error: string | undefined;
+  /** The thread's token totals after this turn, as Codex reported them. */
+  totals: CodexTotals | undefined;
   private done = false;
 
-  constructor(private readonly sink: TurnSink) {}
+  constructor(private readonly sink: TurnSink, private readonly before?: CodexTotals) {}
 
   get finished(): boolean {
     return this.done;
@@ -48,19 +56,10 @@ export class CodexStreamTranslator {
         return;
       case 'turn.completed': {
         this.done = true;
-        const u = ev.usage as { input_tokens?: number; cached_input_tokens?: number; cache_write_input_tokens?: number; output_tokens?: number; reasoning_output_tokens?: number } | undefined;
+        const u = ev.usage as Parameters<typeof codexTotals>[0] | undefined;
         if (u) {
-          const cached = u.cached_input_tokens ?? 0;
-          const cacheWrite = u.cache_write_input_tokens ?? 0;
-          const reasoning = u.reasoning_output_tokens ?? 0;
-          this.sink.setUsage({
-            input: Math.max(0, (u.input_tokens ?? 0) - cached - cacheWrite),
-            output: Math.max(0, (u.output_tokens ?? 0) - reasoning),
-            reasoning,
-            cacheRead: cached,
-            cacheWrite,
-            cost: 0,
-          });
+          this.totals = codexTotals(u);
+          this.sink.setUsage(codexTurnUsage(this.totals, this.before));
         }
         return;
       }

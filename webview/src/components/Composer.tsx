@@ -5,8 +5,9 @@ import { providerBrand } from '../../../src/shared/providerColors';
 import type { ViewState } from '../../../src/shared/protocol';
 import { ENGINE_LABELS } from '../../../src/shared/types';
 import type { Attachment, EngineId, SlashCommand } from '../../../src/shared/types';
-import { IconBrain, IconChart, IconCheck, IconChevron, IconClip, IconClose, IconFile, IconImage, IconSend, IconShield, IconStop, IconWarn, IconZap, IconPlus } from '../icons';
-import { compact, money, tokensAll, tokensIn, tokensOut } from '../format';
+import { IconBrain, IconChart, IconCheck, IconChevron, IconClip, IconClock, IconClose, IconFile, IconImage, IconSend, IconShield, IconStop, IconWarn, IconZap, IconPlus } from '../icons';
+import { WhenMenu } from './Scheduled';
+import { compact, contextAfter, money, tokensAll, tokensCached, usageDetail } from '../format';
 import { send, store } from '../store';
 
 type Popup = { kind: 'slash'; items: SlashCommand[]; index: number } | { kind: 'file'; items: { path: string; relative: string }[]; index: number; start: number; query: string } | undefined;
@@ -54,7 +55,7 @@ export function Composer({ s, onOpenPanel }: { s: ViewState; onOpenPanel: (p: 'm
   const suggestFile = !!af && s.trusted && !s.attachments.some((a) => a.path === af.path && (af.selection ? a.range?.startLine === af.selection.startLine && a.range?.endLine === af.selection.endLine : !a.range));
   const [text, setText] = useState('');
   const [popup, setPopup] = useState<Popup>();
-  const [menu, setMenu] = useState<'engine' | 'effort' | 'agent' | 'approvals' | undefined>();
+  const [menu, setMenu] = useState<'engine' | 'effort' | 'agent' | 'approvals' | 'later' | undefined>();
   const input = useRef<HTMLTextAreaElement>(null);
   const searchSeq = useRef(0);
   const busy = s.activity !== 'idle';
@@ -113,6 +114,17 @@ export function Composer({ s, onOpenPanel }: { s: ViewState; onOpenPanel: (p: 'm
     setText('');
     setPopup(undefined);
   };
+
+  /** Send later: at `at`, or (a time that has passed) as soon as the reply in progress is done. */
+  const later = (at: number) => {
+    setMenu(undefined);
+    if (!text.trim() && s.attachments.length === 0) return;
+    send({ type: 'schedule', text, at });
+    setText('');
+    setPopup(undefined);
+    input.current?.focus();
+  };
+  const nothingToSend = !text.trim() && s.attachments.length === 0;
 
   const accept = (p: NonNullable<Popup>, index = p.index) => {
     if (p.kind === 'slash') {
@@ -256,6 +268,21 @@ export function Composer({ s, onOpenPanel }: { s: ViewState; onOpenPanel: (p: 'm
           <button type="button" class="icon-btn" title="Attach files" aria-label="Attach files" onClick={() => send({ type: 'pickFiles' })}>
             <IconClip />
           </button>
+          <span class="menu-anchor later-anchor">
+            <button
+              type="button"
+              class={`icon-btn later-btn ${menu === 'later' ? 'on' : ''}`}
+              title={nothingToSend ? 'Send later: type a message first' : busy ? 'Send later, or when this reply is done' : 'Send later'}
+              aria-label="Send later"
+              aria-haspopup="menu"
+              aria-expanded={menu === 'later'}
+              disabled={nothingToSend || !s.trusted}
+              onClick={() => setMenu(menu === 'later' ? undefined : 'later')}
+            >
+              <IconClock />
+            </button>
+            {menu === 'later' && <WhenMenu busy={busy} onPick={later} />}
+          </span>
           {busy ? (
             <button type="button" class="send stop" title="Stop (Esc)" aria-label="Stop" onClick={() => send({ type: 'abort' })}>
               <IconStop />
@@ -412,7 +439,7 @@ function SessionTokens({ s }: { s: ViewState }) {
   const total = tokensAll(u);
   if (!total) return null;
   const replies = s.sessionUsage!.messages;
-  const label = `This session: ${tokensIn(u).toLocaleString()} tokens in, ${tokensOut(u).toLocaleString()} out${u.cost ? `, ${money(u.cost)}` : ''} over ${replies} ${replies === 1 ? 'reply' : 'replies'}.${u.cost ? ' Cost is what the engine reported, or an estimate from list prices.' : ''} Click for details.`;
+  const label = `This session used ${total.toLocaleString()} tokens${u.cost ? ` (${money(u.cost)})` : ''} over ${replies} ${replies === 1 ? 'reply' : 'replies'}: ${usageDetail(u)}.${tokensCached(u) > 0 ? ' Cache reads are not part of the number shown.' : ''}${u.cost ? ' Cost is what the engine reported, or an estimate from list prices.' : ''} Click for details.`;
   return (
     <button type="button" class={`pill session-tokens ${u.cost > 0 ? 'has-cost' : ''}`} title={label} aria-label={label} onClick={() => send({ type: 'send', text: '/usage' })}>
       <IconChart size={12} />
@@ -434,7 +461,9 @@ function ContextMeter({ s, limit, onOpen }: { s: ViewState; limit: number | unde
   let used = 0;
   for (let i = s.messages.length - 1; i >= 0 && !used; i--) {
     const m = s.messages[i];
-    if (m.role === 'assistant' && m.usage) used = tokensAll(m.usage);
+    if (m.role === 'assistant' && m.usage) used = contextAfter(m, s.engine) ?? 0;
+    // A reply whose context size is unknown says nothing about the ones before it either.
+    if (m.role === 'assistant' && m.usage && !used) break;
   }
   if (!used) return null;
   const ratio = Math.min(1, used / limit);

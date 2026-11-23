@@ -5,8 +5,8 @@ import { FEEDBACK_KINDS } from '../../../src/shared/feedback';
 import type { FeedbackKind } from '../../../src/shared/feedback';
 import { ENGINE_LABELS } from '../../../src/shared/types';
 import type { McpServerInfo, TokenUsage, UsageRow } from '../../../src/shared/types';
-import { compact, dayLabel, money, relativeTime, tokensAll, tokensIn, tokensOut } from '../format';
-import { IconCheck, IconClose, IconLink, IconPencil, IconPlus, IconRefresh, IconSearch, IconTrash } from '../icons';
+import { compact, contextAfter, dayLabel, money, relativeTime, tokensAll, tokensCached, tokensIn, tokensOut, usageDetail } from '../format';
+import { IconCheck, IconClock, IconClose, IconLink, IconPencil, IconPlus, IconRefresh, IconSearch, IconTrash, IconWarn } from '../icons';
 import { send } from '../store';
 
 export type PanelName = 'none' | 'sessions' | 'mcp' | 'usage' | 'models' | 'feedback';
@@ -106,7 +106,14 @@ export function SessionsPanel({ s, onClose }: { s: ViewState; onClose: () => voi
                 />
               ) : (
                 <button type="button" class="row-main" title={here ? undefined : `Opens in ${ENGINE_LABELS[x.engine]}`} onClick={() => (send(here ? { type: 'switchSession', sessionId: x.id } : { type: 'switchSession', sessionId: x.id, engine: x.engine }), onClose())}>
-                  <span class="row-title">{x.title}</span>
+                  <span class="row-title">
+                    {x.title}
+                    {s.scheduled.some((m) => m.engine === x.engine && m.sessionId === x.id) && (
+                      <span class="row-clock" title="A message is scheduled in this session" aria-label="A message is scheduled in this session">
+                        <IconClock size={11} />
+                      </span>
+                    )}
+                  </span>
                   <span class="row-sub">
                     {scope === 'all' && <span class={`engine-tag ${here ? 'here' : ''}`}>{ENGINE_LABELS[x.engine]}</span>}
                     {relativeTime(x.updatedAt)}
@@ -227,7 +234,7 @@ export function ModelsPanel({ s, onClose }: { s: ViewState; onClose: () => void 
       {hidden > 0 && <p class="sheet-foot">{hidden} more not shown. Type to search.</p>}
       {(s.engine === 'claude-code' || s.engine === 'codex') && (
         <div class="sheet-foot add-model">
-          <span>This is the list {s.engine === 'claude-code' ? 'Claude Code' : 'Codex'} reports for your account. Missing one, such as an earlier version?</span>
+          <span>{s.engine === 'claude-code' ? 'First the models Claude Code reports for your account, then every other Claude version, by name.' : 'This is the list Codex reports for your account.'} Missing one?</span>
           <button type="button" class="btn small" onClick={() => (send({ type: 'addModel' }), onClose())}>
             Add a model by name…
           </button>
@@ -314,13 +321,36 @@ function Stat({ label, value, title }: { label: string; value: string; title?: s
 function Stats({ u, messages }: { u: TokenUsage; messages: number }) {
   return (
     <div class="stats">
-      <Stat label="input" value={compact(u.input)} title={`${u.input.toLocaleString()} uncached input tokens`} />
+      <Stat label="input" value={compact(tokensIn(u))} title={`${u.input.toLocaleString()} new input tokens${u.cacheWrite ? `, and ${u.cacheWrite.toLocaleString()} stored in the prompt cache` : ''}`} />
       <Stat label="output" value={compact(u.output)} title={`${u.output.toLocaleString()} output tokens`} />
-      <Stat label="cached" value={compact(u.cacheRead + u.cacheWrite)} title={`${u.cacheRead.toLocaleString()} read from cache, ${u.cacheWrite.toLocaleString()} written`} />
-      <Stat label="reasoning" value={compact(u.reasoning)} title={`${u.reasoning.toLocaleString()} reasoning tokens`} />
+      <Stat label="thinking" value={compact(u.reasoning)} title={`${u.reasoning.toLocaleString()} thinking tokens`} />
+      <Stat label="cache reads" value={compact(u.cacheRead)} title={`${u.cacheRead.toLocaleString()} tokens read back from the prompt cache: context the model had already seen, read again on every model call and charged at a fraction of the price. They are not part of the token totals below.`} />
       <Stat label="cost" value={money(u.cost)} title="Reported by the engine, or estimated from the pricing you configured" />
       <Stat label={messages === 1 ? 'reply' : 'replies'} value={String(messages)} />
     </div>
+  );
+}
+
+/** A first request this large is worth a sentence: nothing has been said yet, so where do the tokens come from? */
+const LARGE_FIRST_REQUEST = 50_000;
+
+/**
+ * Explains a session whose very first request was already large. Before your message a
+ * request carries the engine's own instructions, the project's instruction files and the
+ * definition of every tool, the tools of each connected MCP server included.
+ */
+function FirstRequestNote({ s }: { s: ViewState }) {
+  const first = s.messages.find((m) => m.role === 'assistant' && m.usage && !m.id.startsWith('local_'));
+  // Only a single model call tells the size of the request; several calls add the context up.
+  const size = first && (first.calls ?? (s.engine === 'opencode' ? 1 : 0)) === 1 ? contextAfter(first, s.engine) : undefined;
+  if (!size || size < LARGE_FIRST_REQUEST) return null;
+  const mcpOn = s.mcp.filter((m) => m.status === 'connected').length;
+  return (
+    <p class="usage-note first-request">
+      <IconWarn size={13} /> The first request of this session already carried {compact(size)} tokens. That is what {ENGINE_LABELS[s.engine]} sends before your message: its instructions, your project's instruction files (such as AGENTS.md or CLAUDE.md), the definition of every tool
+      {mcpOn > 0 ? `, the tools of ${mcpOn} connected MCP ${mcpOn === 1 ? 'server' : 'servers'} included,` : ''} and anything you attached. It is sent again with every model call, mostly from the cache.
+      {mcpOn > 0 && s.capabilities.mcpToggle ? ' Turning off MCP servers you do not need here (the plug icon) makes every request smaller.' : ''}
+    </p>
   );
 }
 
@@ -339,19 +369,21 @@ function ReplyRows({ s }: { s: ViewState }) {
             <th scope="col">#</th>
             <th scope="col">Model</th>
             <th scope="col" class="num">In</th>
+            <th scope="col" class="num" title="Read back from the prompt cache">Cache</th>
             <th scope="col" class="num">Out</th>
             <th scope="col" class="num">Cost</th>
           </tr>
         </thead>
         <tbody>
           {rows.map(({ m, n }) => (
-            <tr key={m.id} title={`${tokensIn(m.usage!).toLocaleString()} in (${m.usage!.cacheRead.toLocaleString()} from cache), ${tokensOut(m.usage!).toLocaleString()} out`}>
+            <tr key={m.id} title={`${usageDetail(m.usage!)}${(m.calls ?? 1) > 1 ? `. ${m.calls} model calls` : ''}`}>
               <td class="num reply-n">{n}</td>
               <th scope="row" class="reply-model">
                 <span class="reply-bar" style={{ width: `${Math.max(3, (tokensAll(m.usage!) / max) * 100)}%` }} />
                 <span class="reply-model-name">{m.model?.modelId ?? ''}</span>
               </th>
               <td class="num">{compact(tokensIn(m.usage!))}</td>
+              <td class="num cached">{tokensCached(m.usage!) > 0 ? compact(tokensCached(m.usage!)) : ''}</td>
               <td class="num">{compact(tokensOut(m.usage!))}</td>
               <td class="num">{m.usage!.cost > 0 ? money(m.usage!.cost) : ''}</td>
             </tr>
@@ -391,7 +423,7 @@ function ModelRows({ rows, providerNames }: { rows: UsageRow[]; providerNames: M
                 {list.map((r) => {
                   const all = tokensAll(r.usage);
                   return (
-                    <tr key={r.modelId} title={`${r.modelId}: ${tokensIn(r.usage).toLocaleString()} in, ${tokensOut(r.usage).toLocaleString()} out, ${r.messages} ${r.messages === 1 ? 'reply' : 'replies'}${r.usage.cost ? `, ${money(r.usage.cost)}` : ''}`} tabIndex={0}>
+                    <tr key={r.modelId} title={`${r.modelId}: ${usageDetail(r.usage)}, ${r.messages} ${r.messages === 1 ? 'reply' : 'replies'}${r.usage.cost ? `, ${money(r.usage.cost)}` : ''}`} tabIndex={0}>
                       <th scope="row">{r.modelId}</th>
                       <td class="bar-cell">
                         <span class="bar" style={{ width: `${Math.max(2, (all / max) * 100)}%` }} />
@@ -456,6 +488,7 @@ export function UsagePanel({ s, onClose }: { s: ViewState; onClose: () => void }
         {session ? (
           <>
             <Stats u={session.usage} messages={session.messages} />
+            <FirstRequestNote s={s} />
             <ReplyRows s={s} />
             {session.byModel.length > 1 && <ModelRows rows={session.byModel} providerNames={providerNames} />}
             {session.byModel.length === 1 && (
@@ -502,7 +535,7 @@ export function UsagePanel({ s, onClose }: { s: ViewState; onClose: () => void }
           </table>
         </section>
       )}
-      <p class="sheet-foot">Counts come from each provider's own usage report. Copilot does not report usage, so its numbers are estimates.</p>
+      <p class="sheet-foot">Counts come from each provider's own usage report. Token totals leave out cache reads (context read again on every model call), which are shown on their own. Copilot does not report usage, so its numbers are estimates.</p>
     </Sheet>
   );
 }

@@ -73,9 +73,18 @@ describe('Claude Code: signing in with a subscription and the models that follow
     const v = await host.until((x) => x.engine === 'claude-code' && x.providers.length > 0 && x.auth?.signedIn === false, 20_000, 'signed-out state');
     expect(v.auth).toMatchObject({ signedIn: false, mode: 'subscription' });
     expect(names().slice(0, 3)).toEqual(['Default (Sonnet 5.5)', 'Sonnet 5.5', 'Haiku 5.5']);
-    // Every family can be picked even when the CLI's list leaves it out, and Opus Plan Mode too.
-    expect(ids()).toEqual(['default', 'sonnet', 'haiku', 'fable', 'opus', 'opusplan']);
-    expect(names()).toEqual(expect.arrayContaining(['Fable (latest)', 'Opus (latest)', 'Opus Plan Mode']));
+    // Every family can be picked even when the CLI's list leaves it out, and Opus Plan Mode too:
+    // by version and full id (from the catalogue that ships with the extension), never as "latest".
+    expect(ids().slice(0, 3)).toEqual(['default', 'sonnet', 'haiku']);
+    expect(ids()[3]).toMatch(/^claude-fable-\d/);
+    expect(ids()[4]).toMatch(/^claude-opus-\d/);
+    expect(ids()[5]).toBe('opusplan');
+    expect(names()[3]).toMatch(/^Fable \d+(\.\d+)?$/);
+    expect(names()[4]).toMatch(/^Opus \d+(\.\d+)?$/);
+    expect(names().some((n) => /latest/i.test(n))).toBe(false);
+    // Earlier versions follow, each once.
+    expect(ids().slice(6).every((id) => /^claude-[a-z]+-\d/.test(id))).toBe(true);
+    expect(new Set(ids()).size).toBe(ids().length);
   });
 
   it('after signing in from the chat, the list follows the plan, even when the CLI learns the plan a moment later', async () => {
@@ -89,13 +98,15 @@ describe('Claude Code: signing in with a subscription and the models that follow
     expect(signedIn.auth!.label).toBe('Claude account · Max · dev@example.com');
     // The extension lists the models straight away, and gets that generic list.
     await host.until(() => listings() > asked, 20_000, 'models listed after the sign-in');
-    expect(names()).not.toContain('Fable 5.2');
+    expect(ids()).not.toContain('fable');
     // Only then does the CLI know the plan. The list must still catch up by itself.
     set({ loggedIn: true, email: 'dev@example.com', subscriptionType: 'max', models: MAX_PLAN });
-    await host.until((x) => x.providers.flatMap((p) => p.models).some((m) => m.name === 'Fable 5.2'), 20_000, 'the plan\'s models');
+    await host.until((x) => x.providers.flatMap((p) => p.models).some((m) => m.modelId === 'fable'), 20_000, 'the plan\'s models');
     expect(names().slice(0, 6)).toEqual(['Default (Opus 5.5)', 'Opus 5.5', 'Fable 5.2', 'Sonnet 5.5', 'Haiku 5.5', 'Opus 5']);
-    // Everything the CLI reported is there, nothing twice, and the extra entry follows.
-    expect(ids()).toEqual(['default', 'opus', 'fable', 'sonnet', 'haiku', 'claude-opus-5', 'opusplan']);
+    // Everything the CLI reported is there, nothing twice, and the extra entries follow.
+    expect(ids().slice(0, 7)).toEqual(['default', 'opus', 'fable', 'sonnet', 'haiku', 'claude-opus-5', 'opusplan']);
+    expect(new Set(ids()).size).toBe(ids().length);
+    expect(names().some((n) => /latest/i.test(n))).toBe(false);
   });
 
   it('notices a sign-in made outside the chat when the window gets the focus back', async () => {
@@ -103,7 +114,7 @@ describe('Claude Code: signing in with a subscription and the models that follow
     set({ loggedIn: false, models: GENERIC });
     controller.onShown();
     await host.until((x) => x.auth?.signedIn === false, 20_000, 'sign-out noticed');
-    await host.until(() => ids().join() === 'default,sonnet,haiku,fable,opus,opusplan', 20_000, 'signed-out list');
+    await host.until(() => ids().slice(0, 3).join() === 'default,sonnet,haiku' && !ids().includes('opus') && ids().includes('opusplan'), 20_000, 'signed-out list');
 
     set({ loggedIn: true, email: 'other@example.com', subscriptionType: 'pro', models: MAX_PLAN.slice(0, 4) });
     // Asked again too soon: checks are spaced out, so a burst of focus events costs nothing.
@@ -113,8 +124,11 @@ describe('Claude Code: signing in with a subscription and the models that follow
     controller.onShown();
     const v = await host.until((x) => x.auth?.signedIn === true, 20_000, 'sign-in noticed');
     expect(v.auth!.label).toBe('Claude account · Pro · other@example.com');
-    await host.until(() => names().includes('Fable 5.2'), 20_000, 'the other plan\'s models');
-    expect(ids()).toEqual(['default', 'opus', 'fable', 'sonnet', 'haiku', 'opusplan']);
+    await host.until(() => ids().includes('fable'), 20_000, 'the other plan\'s models');
+    // This plan's list has no Haiku: it is offered by version from the catalogue instead.
+    expect(ids().slice(0, 4)).toEqual(['default', 'opus', 'fable', 'sonnet']);
+    expect(ids()[4]).toMatch(/^claude-haiku-\d/);
+    expect(ids()[5]).toBe('opusplan');
   }, 60_000);
 
   it('adds any other model by name, selects it and keeps it in settings', async () => {
@@ -126,7 +140,8 @@ describe('Claude Code: signing in with a subscription and the models that follow
     host.inputs.push('  claude-sonnet-4-6 ');
     await controller.handleMessage({ type: 'addModel' });
     expect(ctx.settings['claudeCode.models']).toEqual(['claude-sonnet-4-6']);
-    expect(ids().at(-1)).toBe('claude-sonnet-4-6');
+    // Listed with the account's own models, by its real name, and marked as the user's.
+    expect(host.view!.providers[0].models.find((m) => m.modelId === 'claude-sonnet-4-6')).toMatchObject({ name: 'Sonnet 4.6', description: 'Added by you' });
     expect(host.view!.model).toEqual({ providerId: 'claude-code', modelId: 'claude-sonnet-4-6' });
     // Adding it again does not list it twice.
     host.inputs.push('claude-sonnet-4-6');

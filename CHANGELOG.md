@@ -1,5 +1,29 @@
 # Changelog
 
+## v0.7.0
+
+### Added
+
+- **Send later.** The clock next to **Send** schedules the message in the box, with its attachments, model, agent and effort: in 30 minutes, in an hour, this evening, tomorrow at 9:00, or at a date and time you choose. While a reply is being written, **When this reply is done** queues the message behind it. `/later 30m run the tests`, `/later 14:30 …`, `/later tomorrow 9am …` and `/later next …` do the same from the keyboard. What is waiting is listed under **Scheduled**, above the message box, with a countdown; each entry can be sent now, edited, moved to another time or cancelled, and the sessions list marks conversations that have one. When its time comes the chat opens the message's conversation and sends it as if you had pressed Send. It never interrupts a reply in progress, and a message queued behind a reply that you stop waits for you. Scheduled messages are kept on your computer; VS Code has to be open at that time, and a message that was missed is sent when the chat next runs (`opencodeHub.chat.sendLater.sendMissed` turns that off).
+- **Visual answers.** `/preview <request>` asks the model for a report, chart, diagram or mock-up, and the reply is drawn in the chat: HTML, CSS, tables, inline SVG and `<details>` sections, in your colour theme. Hover a preview for **Source**, **Expand** and **Save HTML** (a self-contained file). HTML and SVG code blocks in any reply get a **Preview** button. It works with every engine. Previews are model output, so scripts, forms, links and anything loaded from the network are removed, and a preview cannot draw outside its own box. `opencodeHub.chat.htmlPreview` turns it off.
+- **Claude Code: every Claude version in the model picker, by name.** After the models the CLI reports for your account, the picker lists every other Claude model with its real name and full id ("Opus 5.5", `claude-opus-5-5`), newest first, with earlier versions below. Entries that only said "Opus (latest)" are gone: picking "Opus 5.5" runs Opus 5.5, also when an older Claude Code still takes a bare `opus` to mean an earlier version. The list comes from the catalogue that ships with the extension and is refreshed every week.
+- **The model that answered, under each reply.** The id the provider reports (`claude-opus-5-5`) is shown next to the reply's tokens. A model asked which model it is answers from its training data and often names an older version; this is the one that ran. Claude Code replies are now recorded under that real id in the usage panel instead of under the alias that was picked.
+- **Why a first request can be large.** When the first request of a session already carries more than 50k tokens, `/usage` says so and what is in it: the engine's instructions, your project's instruction files, the definition of every tool (the tools of each connected MCP server included) and your attachments.
+
+### Fixed
+
+- **Scrolling is smooth.** Three things made the message list jump. Messages that had not been drawn yet were sized by a guess, so the list changed height as you scrolled through a long session and the scroll bar jumped under the pointer: every message now has its real height. The view followed a streaming reply by checking how close to the end it was, so the first pixels of a scroll up were pulled back down by the next chunk of text: it now lets go the moment you scroll up (wheel, keys, touch or the scroll bar) and follows again when you are back at the end. And the **Latest** button was part of the scrolled content, so the list grew and shrank as it came and went: it now floats over the list.
+- **Codex: every reply showed the tokens of the whole conversation.** Codex reports a resumed thread's token counters from the thread's start, so the second reply was shown (and added to the totals) with the first reply's tokens as well, the third with the first two, and so on. Each reply now gets only its own turn.
+- **Claude Code: every reply was charged the cost of the whole conversation.** Claude Code reports a resumed conversation's cost from its first turn. Each reply now shows its own cost. The token counts were already per turn.
+- **Sessions saved before this version are corrected.** Codex and Claude Code sessions that hold those running totals are put right when you open them, and the usage totals follow.
+- **Cache reads no longer inflate the numbers.** A reply that takes ten tool steps reads its conversation from the prompt cache ten times, at a fraction of the price. Those reads were added to "tokens in" and to every total, which made a single question look like hundreds of thousands of tokens and a session like millions. Replies now show **in** (new input), **cached** (read back from the cache) and **out** separately, with the number of model calls when there were several, and the session total, the status bar and the bars in `/usage` count tokens used without the cache reads, which have a figure of their own.
+- **The context ring showed several times the real context.** For a reply of several model calls it used the sum over all of them. It now uses the context after the last call (Claude Code, Direct BYOK, Copilot and opencode report it). Codex does not, so the ring is not shown for Codex.
+
+### Changed
+
+- A model you add by name in Claude Code is listed right after your account's models, with its real name when it is a Claude version.
+- When a reply is in progress, the message that says so also points at Send later.
+
 ## v0.6.2
 
 ### Added

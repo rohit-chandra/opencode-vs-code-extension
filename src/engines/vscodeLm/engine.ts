@@ -161,6 +161,7 @@ export class VscodeLmEngine extends LocalEngine {
         const promptText = wire.map((m) => m.blocks.map((b) => ('text' in b ? b.text : 'args' in b ? b.args : '')).join('\n')).join('\n');
         const [inTok, outTok] = await Promise.all([model.countTokens(system + '\n' + promptText, cts.token).then(Number, () => 0), model.countTokens(replyText || ' ', cts.token).then(Number, () => 0)]);
         assistant.addUsage({ input: inTok, output: outTok });
+        assistant.modelCall(inTok + outTok);
 
         const reply: WireBlock[] = [];
         if (replyText) reply.push({ type: 'text', text: replyText });

@@ -357,16 +357,26 @@ kbd {
 }
 
 /* ----------------------------------------------------------------- messages */
-.messages {
+.messages-wrap {
   position: relative;
   flex: 1;
   min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.messages {
+  flex: 1;
+  min-height: 0;
   overflow-y: auto;
+  scrollbar-gutter: stable;
+  /* A scroll that reaches either end stays here instead of moving the page around it. */
+  overscroll-behavior: contain;
+}
+.messages-list {
   padding: 12px 12px 16px;
   display: flex;
   flex-direction: column;
   gap: 14px;
-  scrollbar-gutter: stable;
 }
 /* On a wide view (editor tab, large side bar) the conversation stays a readable column. */
 .msg,
@@ -383,12 +393,12 @@ kbd {
   flex-direction: column;
   gap: 7px;
   min-width: 0;
-  /* Off-screen messages skip layout and paint; long sessions stay as quick as short ones. */
-  content-visibility: auto;
-  contain-intrinsic-size: auto 90px;
-}
-.msg:last-child {
-  content-visibility: visible;
+  /*
+   * Each message is its own layout island, so a streaming reply only lays out itself.
+   * (Not content-visibility: that sizes messages it has not drawn yet by a guess, and the
+   * list then changes height as you scroll through it, which makes the scroll bar jump.)
+   */
+  contain: layout;
 }
 .msg.user {
   align-items: flex-end;
@@ -477,10 +487,11 @@ kbd {
   }
 }
 .jump {
-  position: sticky;
-  bottom: 0;
-  flex: none;
-  align-self: center;
+  position: absolute;
+  left: 50%;
+  bottom: 8px;
+  transform: translateX(-50%);
+  z-index: 2;
   display: flex;
   align-items: center;
   gap: 4px;
@@ -1975,4 +1986,228 @@ kbd {
 }
 .add-model span {
   flex: 1 1 14em;
+}
+
+/* --------------------------------------------------------------- token meta */
+.meta-cached {
+  opacity: 0.75;
+}
+.usage-table .num.cached {
+  opacity: 0.7;
+}
+.usage-note.first-request {
+  margin-top: 8px;
+  padding: 7px 9px;
+  border: 1px solid var(--oh-border);
+  border-left: 2px solid var(--oh-warn);
+  border-radius: 4px;
+  line-height: 1.45;
+}
+.usage-note.first-request .icon {
+  color: var(--oh-warn);
+  vertical-align: -2px;
+}
+
+/* --------------------------------------------------------------- send later */
+.menu.align-right {
+  left: auto;
+  right: 0;
+}
+.menu[hidden],
+.menu-item[hidden] {
+  display: none;
+}
+.later-anchor {
+  flex: none;
+}
+.later-btn.on {
+  color: var(--oh-accent);
+}
+.when-menu {
+  min-width: 230px;
+}
+.when-menu .menu-item {
+  justify-content: space-between;
+}
+.when-custom {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 6px 6px;
+}
+.when-custom input {
+  flex: 1;
+  min-width: 0;
+  font: inherit;
+  font-size: 0.9em;
+  padding: 3px 5px;
+  color: var(--vscode-input-foreground, inherit);
+  background: var(--vscode-input-background, transparent);
+  border: 1px solid var(--vscode-input-border, var(--oh-border));
+  border-radius: 4px;
+  color-scheme: light dark;
+}
+body.vscode-dark .when-custom input,
+body.vscode-high-contrast .when-custom input {
+  color-scheme: dark;
+}
+body.vscode-light .when-custom input {
+  color-scheme: light;
+}
+.scheduled {
+  flex: none;
+  max-width: 880px;
+  width: calc(100% - 20px);
+  margin: 0 auto 6px;
+  border: 1px solid var(--oh-border);
+  border-radius: var(--oh-radius);
+  background: var(--oh-surface);
+}
+.scheduled-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: 4px 9px;
+  color: var(--oh-muted);
+  font-size: 0.85em;
+  text-align: left;
+}
+.scheduled-list {
+  list-style: none;
+  margin: 0;
+  padding: 0 4px 4px;
+  max-height: 168px;
+  overflow-y: auto;
+}
+.scheduled-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 7px;
+  padding: 4px 5px;
+  border-radius: 4px;
+}
+.scheduled-item:hover,
+.scheduled-item:focus-within {
+  background: var(--oh-hover);
+}
+.scheduled-icon {
+  flex: none;
+  margin-top: 2px;
+  color: var(--oh-accent);
+}
+.scheduled-item.stuck .scheduled-icon {
+  color: var(--oh-warn);
+}
+.scheduled-main {
+  flex: 1;
+  min-width: 0;
+}
+.scheduled-when {
+  font-size: 0.85em;
+  color: var(--oh-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.scheduled-item.stuck .scheduled-when {
+  color: var(--oh-warn);
+}
+.scheduled-text {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.scheduled-files {
+  color: var(--oh-muted);
+}
+.scheduled-problem {
+  font-size: 0.85em;
+  color: var(--oh-muted);
+  overflow-wrap: anywhere;
+}
+.scheduled-actions {
+  flex: none;
+  display: flex;
+  align-items: center;
+  opacity: 0.55;
+}
+.scheduled-item:hover .scheduled-actions,
+.scheduled-item:focus-within .scheduled-actions {
+  opacity: 1;
+}
+.scheduled-actions .icon-btn {
+  width: 22px;
+  height: 22px;
+}
+.row-clock {
+  margin-left: 5px;
+  color: var(--oh-accent);
+  vertical-align: -1px;
+}
+
+/* ------------------------------------------------------------ html previews */
+.preview-host {
+  display: none;
+  /* Layout and paint stay inside this box: nothing the preview positions can cover the chat. */
+  contain: content;
+  position: relative;
+  overflow: auto;
+  max-height: min(70vh, 560px);
+  padding: 10px 12px;
+}
+.code.previewing > .preview-host {
+  display: block;
+}
+.code.previewing > pre {
+  display: none;
+}
+.code.previewing.expanded > .preview-host {
+  max-height: none;
+}
+/* A drawn preview is part of the reply: no frame, and its buttons only while it is pointed at. */
+.code[data-preview='auto'].previewing {
+  position: relative;
+  border-color: transparent;
+  background: none;
+}
+.code[data-preview='auto'].previewing > .preview-host {
+  padding: 2px 0;
+}
+.code[data-preview='auto'].previewing > .code-bar {
+  position: absolute;
+  top: 0;
+  right: 0;
+  z-index: 1;
+  border: 1px solid var(--oh-border);
+  border-radius: 4px;
+  background: var(--oh-surface);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.12s;
+}
+.code[data-preview='auto'].previewing:hover > .code-bar,
+.code[data-preview='auto'].previewing:focus-within > .code-bar {
+  opacity: 1;
+  pointer-events: auto;
+}
+.code[data-preview='auto'].previewing > .code-bar .code-lang,
+.code[data-preview='auto'].previewing [data-action='insert'],
+.code:not(.previewing) [data-action='expand'],
+.code:not(.previewing) [data-action='save-html'] {
+  display: none;
+}
+.bubble-tag {
+  display: inline-block;
+  margin-left: 8px;
+  padding: 0 6px;
+  border: 1px solid var(--oh-border);
+  border-radius: 999px;
+  color: var(--oh-muted);
+  font-size: 0.8em;
+  white-space: nowrap;
+}
+/* The "change the time" menu opens out of the list; while it is open the list does not clip it. */
+.scheduled-list:has(.when-menu) {
+  overflow: visible;
 }

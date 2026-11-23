@@ -24,7 +24,9 @@ Works on **Windows, macOS and Linux**, including remote windows (SSH, WSL, dev c
 | [Connect an engine](#step-4-connect-an-engine) | [Attachments](#attachments) | [Performance](#performance) | [Tests](#tests) |
 | [Where the chat lives](#where-the-chat-lives) | [Sessions](#sessions) | [Settings](#settings) | [Releasing and maintaining](#releasing-and-maintaining) |
 | [If something does not work](#if-something-does-not-work) | [Effort](#effort) | [Security and privacy](#security-and-privacy) | [Licence](#licence) |
-|  | [Ask or Auto](#ask-or-auto) | [Limits worth knowing](#limits-worth-knowing) |  |
+|  | [Send later](#send-later) | [Limits worth knowing](#limits-worth-knowing) |  |
+|  | [Visual answers](#visual-answers-html-previews) |  |  |
+|  | [Ask or Auto](#ask-or-auto) |  |  |
 |  | [Questions from the agent](#questions-from-the-agent) |  |  |
 |  | [MCP servers](#mcp-servers) |  |  |
 |  | [Token usage and cost](#token-usage) |  |  |
@@ -258,6 +260,8 @@ Type `/` to see every command, filtered as you type. Commands defined by the eng
 | `/compact`, `/undo`, `/redo`, `/share`, `/unshare`, `/fork` | Session tools, where the engine supports them |
 | `/rename <title>`, `/export` | Rename the session, or save it as Markdown |
 | `/stop` | Stop the current response (`Esc` also works) |
+| `/later <when> <message>` | Send a message later (see [Send later](#send-later)) |
+| `/preview <request>` | Ask for a visual answer drawn in the chat (see [Visual answers](#visual-answers-html-previews)) |
 | `/move [left\|right\|editor]` | Put the chat on the left, on the right, or in an editor tab |
 | `/zoom [in\|out\|reset\|125%]` | Change the chat's text size |
 | `/avatar [on\|off\|buddy\|dots]` | Show, hide or restyle the companion |
@@ -277,7 +281,9 @@ Output of `/help` and `/doctor` is a card with a close button; it is not part of
 
 - When a reply fails, or you stop it, a **Retry** button appears under it. It sends your last message again (attachments are not re-sent).
 - The model picker lists the models you used most recently for the current engine at the top, above the full list by provider.
-- New models appear by themselves. The lists are not built into the extension: they come from the engine each time (the CLI's list for your account, opencode's catalogue, a BYOK provider's `/models`, VS Code's model API). The chat asks again when you open the picker, when it comes back into view after a while and after a reply, so a window left open for days still gets a model released today. With Codex and Claude Code the CLI decides what it lists, and an old CLI may not list the newest models: update the CLI when one is missing.
+- New models appear by themselves. The lists are not built into the extension: they come from the engine each time (the CLI's list for your account, opencode's catalogue, a BYOK provider's `/models`, VS Code's model API). The chat asks again when you open the picker, when it comes back into view after a while and after a reply, so a window left open for days still gets a model released today. With Codex the CLI decides what it lists, and an old CLI may not list the newest models: update the CLI when one is missing.
+- **Claude Code lists every Claude version by name.** First come the models the CLI reports for your account ("Opus 5.5", "Sonnet 5.5"…). After them comes every other Claude model, newest first, each with its real name and full id (`claude-opus-5-5`), from the catalogue that ships with the extension and is refreshed every week. Nothing is called "latest": picking "Opus 5.5" runs Opus 5.5, also when an older CLI still takes a bare `opus` to mean an earlier version. A model your plan does not include answers with Anthropic's own message.
+- **Which model answered.** Under each reply is the id of the model that produced it, as the provider reports it (`claude-opus-5-5`). That is the one to trust: a model asked "which model are you?" answers from its training data and often names an older version.
 
 ### Effort
 
@@ -318,6 +324,34 @@ The history button (or `/sessions`) lists your saved sessions. **All engines** s
 - **Memory stays flat.** Listing reads a small index of titles and dates; a conversation's messages are read from disk when you open it, and only the last few opened stay in memory.
 - **Carry context into a new chat, when you want it.** A new session starts clean. To build on an older one, click the link icon next to it in the sessions list, or type `/context`. A condensed copy (what you asked, what was answered and which tools ran; no tool output) is attached to your next message as a chip you can remove. It works across engines, calls no model and costs nothing until you send it.
 - **Old sessions are cleaned up.** Sessions not used for 30 days are deleted when VS Code starts, like Claude Code's default. Change it with `opencodeHub.sessions.keepDays` (`0` keeps everything). opencode's sessions follow opencode's own rules.
+
+### Send later
+
+The clock next to **Send** schedules the message in the box, with its attachments and the model, agent and effort that are selected:
+
+- **In 30 minutes**, **In 1 hour**, **In 3 hours**, **This evening**, **Tomorrow at 9:00**, or **Choose date and time…**
+- **When this reply is done** (offered while a reply is being written) queues the message behind it. Several queued messages go out one after the other.
+- From the keyboard: `/later 30m run the tests`, `/later 1h30m …`, `/later 14:30 …`, `/later 9am …`, `/later tomorrow 9am …`, `/later 2026-12-01 14:30 …`, `/later next …` (after the current reply).
+
+What is waiting is listed under **Scheduled**, above the message box, with a countdown. Each entry can be sent now, taken back into the message box to change it, moved to another time, or cancelled. A clock marks the session in the sessions list.
+
+When the time comes, the chat opens that message's conversation (switching engine if it has to) and sends it, exactly as if you had pressed Send, so approvals and questions work as usual. It never interrupts: while a reply is being written, anywhere in the chat, the message waits for it to finish. A message queued behind a reply that you **stop** is not sent by itself; it stays under Scheduled until you send it.
+
+Things to know:
+
+- Scheduled messages are kept on your computer, in VS Code's own storage for the workspace. Nothing is sent to a server to wait there.
+- VS Code has to be open, with the chat loaded, at that time. Scheduling does not wake a sleeping computer. A message whose time passed while VS Code was closed is sent when the chat is next running; turn `opencodeHub.chat.sendLater.sendMissed` off to keep such messages until you send them yourself.
+- A message that could not be sent (the engine is not available, you are signed out) stays in the list with the reason.
+
+### Visual answers (HTML previews)
+
+`/preview <request>` asks the model to answer with a visual instead of prose: a report, a chart, a diagram, a comparison table, a mock-up. For example `/preview a bar chart of the ten largest files in src` or `/preview compare the three logging libraries we discussed`. The reply is drawn in the chat as part of the answer.
+
+- It works with every engine. The request is sent with a short instruction block appended; the chat shows your request with an **HTML preview** tag instead of that block.
+- A preview takes HTML, CSS, tables, inline SVG and `<details>` sections, and follows your colour theme. Hover it for **Source** (the markup), **Expand** and **Save HTML**, which exports a self-contained file.
+- Scripts, forms, links and anything that would load from the network are removed, and a preview cannot draw outside its own box (see [Security and privacy](#security-and-privacy)).
+- Any ` ```html ` or ` ```svg ` code block in a reply gets a **Preview** button, and a model can produce a preview on its own by writing a ` ```html-preview ` block.
+- `opencodeHub.chat.htmlPreview` turns all of this off; the blocks are then shown as code.
 
 ### Ask or Auto
 
@@ -371,14 +405,27 @@ The plug icon shows how many MCP servers are connected. Open it to see each serv
 
 ### Token usage
 
-Every reply records input, output, reasoning and cached tokens, plus cost when the engine reports it.
+Every reply records what it used, plus cost when the engine reports it.
 
-- Under each reply: tokens in and out for that reply, and its cost. Hover for the model and the full breakdown.
-- Next to the model under the message box: what the **open session** has cost so far, with its tokens (in a narrow side bar the dollars are shown and the tokens move to the tooltip). Hover for tokens in and out and the number of replies; click to open the usage panel. The status bar shows the same total.
-- `/usage`: this session with a **per-reply breakdown** (model, tokens in and out, cost of each reply), all sessions, a breakdown by provider and model across every engine, tokens per day and recent sessions.
+**How to read the numbers.** A model call reads the whole conversation again, and a reply that uses tools makes one call per step. Providers keep what they have already seen in a prompt cache and charge a small fraction for reading it back. So three figures are shown, and they are not added together:
+
+| | |
+|---|---|
+| **in** | Input the model processed at full price: your new text and tool results, and text being stored in the cache for the first time |
+| **cached** | Input read back from the cache: the conversation so far, read again on every model call |
+| **out** | What the model wrote, thinking included |
+
+Token totals (the session figure, the status bar, the bars in `/usage`) leave out the cache reads, which have a figure of their own. A reply of ten tool steps on a 50k-token conversation reads 500k tokens from the cache; counting those would make one question look like half a million tokens.
+
+- Under each reply: the model that answered, **in**, **cached**, **out**, the number of model calls when there were several, and the cost. Hover for the full breakdown and the size of the context after the reply.
+- Next to the model under the message box: what the **open session** has used so far and its cost (in a narrow side bar the dollars are shown and the tokens move to the tooltip). Click to open the usage panel. The status bar shows the same total.
+- `/usage`: this session with a **per-reply breakdown** (model, in, cache, out, cost of each reply), all sessions, a breakdown by provider and model across every engine, tokens per day and recent sessions.
 - The sessions list shows each session's total.
+- In the corner of the message box: a ring that fills as the conversation approaches the model's context window. It turns into a warning with a percentage at 75% and again at 90%, and its tooltip gives the numbers. It shows the size of the context after the last model call, not the sum over a reply's calls. Codex does not report that figure, so there is no ring for Codex.
 
-- In the corner of the message box: a ring that fills as the conversation approaches the model's context window. It turns into a warning with a percentage at 75% and again at 90%, and its tooltip gives the numbers. The figure comes from the last reply, so treat it as an estimate.
+**A first reply that already shows a few hundred thousand tokens** means the first request was that large before you typed anything: it carries the engine's own instructions, your project's instruction files (`AGENTS.md`, `CLAUDE.md`), the definition of every tool including those of each connected MCP server, and whatever you attached. `/usage` says so when it happens. The usual cause is MCP servers with many tools; turn off the ones you do not need for the project (the plug icon).
+
+**Per turn, not running totals.** Codex reports a resumed thread's token counters from the thread's start, and Claude Code reports a resumed conversation's cost the same way. The extension subtracts what the conversation had reached before each turn, so every reply shows its own share. Sessions saved by versions before 0.7.0, which showed the running totals, are corrected when you open them.
 
 Statistics are stored locally in VS Code and survive restarts. *OpenCode Hub: Reset Token Usage Statistics* clears them.
 
@@ -476,7 +523,8 @@ The chat is built to stay out of the editor's way.
 - **Fast start.** The extension activates only when you open the chat or run one of its commands. The chat bundle is about 230 KB; the 3D companion is a separate bundle that loads when the browser is idle.
 - **Models without the wait.** Asking an engine for its models can take seconds (a CLI has to start and ask your account, opencode's server has to boot, a BYOK endpoint has to answer). The last list of each engine is kept and shown the moment you select the engine or open VS Code, and the fresh one replaces it when it arrives. Only an engine's first use in a workspace waits.
 - **Smooth streaming.** Tokens are grouped on the extension side and applied once per animation frame. Markdown is parsed block by block, and only the block that is still growing is parsed again. Finished messages are not re-rendered at all.
-- **Long conversations.** Messages that are off screen are skipped by the browser's layout (`content-visibility`). Large model lists are capped and searched as you type.
+- **Steady scrolling.** The list follows a streaming reply until you scroll up, and follows again when you are back at the end. Whether to follow is decided from what you did (wheel, keys, touch, dragging the scroll bar), not from how close to the end the view happens to be, so a new chunk of text never pulls the view back while you start to scroll. Every message keeps its real height, so the scroll bar does not jump as you move through a long session, and the **Latest** button floats over the list instead of sitting in it.
+- **Long conversations.** Each message is its own layout island (`contain: layout`), so a streaming reply lays out only itself. Large model lists are capped and searched as you type.
 - **A cheap companion.** Oki renders only when something moves: about 60 frames per second during a celebration, fewer when idle, and none when the chat is hidden or out of view. Its face is redrawn only when the expression changes.
 
 Measured with the UI test suite (headless Chrome, software rendering): a reply streamed as 977 chunks (11.7 KB of Markdown with code blocks) is on screen in about 1.2 seconds at 60 frames per second with no long tasks. Before these changes the same reply took about 7.8 seconds. `npm run test:ui` repeats the measurement and fails if streaming gets slow again.
@@ -500,6 +548,8 @@ Measured with the UI test suite (headless Chrome, software rendering): a reply s
 | `opencodeHub.avatar.enabled`, `.style` | `true`, `buddy` | Companion on/off, and `buddy` (the character) or `dots` |
 | `opencodeHub.chat.zoom` | `1` | Text size of the chat, from `0.8` to `1.6` |
 | `opencodeHub.chat.providerColors` | `true` | Colour the chat by the model's maker (Claude orange, OpenAI green, …) |
+| `opencodeHub.chat.htmlPreview` | `true` | Draw `html-preview` blocks in the chat and offer **Preview** on HTML and SVG code blocks |
+| `opencodeHub.chat.sendLater.sendMissed` | `true` | Send a scheduled message whose time passed while VS Code was closed as soon as the chat runs again |
 | `opencodeHub.chat.askQuestions` | `true` | Direct BYOK and Copilot: let the model ask you clarifying questions through the chat |
 | `opencodeHub.usage.statusBar` | `true` | Session tokens in the status bar |
 | `opencodeHub.usage.estimateCost` | `true` | Estimate cost from list prices when the engine reports none |
@@ -523,6 +573,8 @@ A custom provider looks like this:
 - The opencode server the extension starts listens on `127.0.0.1` only and is protected with a random password for each run.
 - Your prompts and attachments go only to the engine and model you selected. The extension has no telemetry and makes no other network requests. Feedback opens a pre-filled GitHub issue in your browser, which you submit yourself.
 - Model output is sanitized before it is shown. The chat view loads no remote content.
+- HTML previews are model output too. Before one is drawn, scripts, event handlers, forms, frames, embedded media and link targets are removed, and so are `@import` and remote `url()` references in its CSS. It is drawn in a shadow root, so its styles cannot restyle the chat, inside a box that contains layout and paint, so nothing in it can be placed over the chat's own buttons. The chat view's content security policy allows no remote images, styles or fonts either way.
+- Scheduled messages (Send later) are stored in VS Code's own storage on your machine, with the attachments you chose. They are sent only from this window, at their time.
 - The saved model lists (for an instant picker) are plain files in the extension's storage folder. They hold model names and capabilities only, and an engine you have not selected is never asked for its list in the background.
 - In an untrusted workspace no engine is started and chat is off, because engines run executables, load project configuration (MCP servers, plugins) and can run tools. Engine settings stored in the workspace (CLI paths, providers, MCP servers) are ignored there.
 - Tool permissions: in Ask mode, opencode permission requests, Claude Code tool calls and MCP tool calls in Direct BYOK and Copilot are shown for approval. Claude Code's requests, and the questions it asks you, come through a small MCP server the extension writes to its storage folder and gives the CLI with `--permission-prompt-tool`; it talks only to `127.0.0.1` with a random token per turn. Codex runs non-interactively, so what it may do is set by `codex.sandbox`. In Auto mode everything is approved without asking.
@@ -531,7 +583,9 @@ A custom provider looks like this:
 
 - Codex cannot ask for approval mid-run, and it has no question card: it asks in plain text and you answer in the chat. Choose its sandbox in settings.
 - The Direct BYOK and Copilot engines are chat with MCP tools (and the tool for asking you questions). They do not edit files on their own; use opencode, Claude Code or Codex for agentic coding.
-- Effort levels and model lists are the engine's: Codex and Claude Code list what your installed CLI knows, so an old CLI can leave out the newest models and levels. Update the CLI when one is missing. Copilot has no effort setting.
+- Effort levels and model lists are the engine's: Codex lists what your installed CLI knows, so an old CLI can leave out the newest models and levels. Update the CLI when one is missing. Copilot has no effort setting.
+- Send later needs VS Code open with the chat loaded at that time. The model cannot schedule a follow-up by itself; you schedule messages.
+- Codex reports token totals for a whole turn only, so the context ring is not shown for it, and a reply's "in" adds up every model call of the turn.
 - Direct BYOK keeps a long conversation going by leaving the oldest turns out of the request once the provider reports that the context window is full (the chat tells you when that starts). It does not summarize them. Local servers that cut long prompts silently need `opencodeHub.direct.maxContextTokens`.
 - A new session does not remember earlier ones on its own. Use `/context` to bring one in, or keep lasting instructions in the files your engine reads (`AGENTS.md`, `CLAUDE.md`).
 - Sharing, undo and compaction are available where the engine has them (opencode has all three).

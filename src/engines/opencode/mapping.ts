@@ -1,4 +1,5 @@
 import { toEffortLevels } from '../../shared/effort';
+import { totalTokens } from '../../shared/types';
 import type { ChatMessage, EffortLevel, McpServerInfo, McpStatus, ModelInfo, Part, PermissionRequest, ProviderInfo, QuestionRequest, SessionInfo, SlashCommand, TokenUsage } from '../../shared/types';
 
 /* Loose shapes of the opencode server payloads we consume (see `GET /doc` on a running server). */
@@ -129,6 +130,7 @@ function fileNameFromUrl(url: string | undefined): string {
 export function mapMessage(info: OcMessageInfo, parts: OcPart[] = []): ChatMessage {
   const providerId = info.providerID ?? info.model?.providerID;
   const modelId = info.modelID ?? info.model?.modelID;
+  const usage = info.role === 'assistant' ? mapUsage(info.tokens, info.cost) : undefined;
   return {
     id: info.id,
     sessionId: info.sessionID,
@@ -138,7 +140,9 @@ export function mapMessage(info: OcMessageInfo, parts: OcPart[] = []): ChatMessa
     parts: parts.map(mapPart).filter((p): p is Part => p !== undefined),
     model: providerId && modelId ? { providerId, modelId } : undefined,
     agent: info.agent ?? info.mode,
-    usage: info.role === 'assistant' ? mapUsage(info.tokens, info.cost) : undefined,
+    usage,
+    // opencode writes one message per model call, so a message's tokens are the context after it.
+    ...(usage && totalTokens(usage) > 0 ? { contextTokens: totalTokens(usage), calls: 1 } : {}),
     error: info.error && info.error.name !== 'MessageAbortedError' ? (info.error.data?.message ?? info.error.name ?? 'Error') : undefined,
   };
 }

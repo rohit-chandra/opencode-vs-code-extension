@@ -11,6 +11,7 @@ import type {
   EngineStatus,
   McpServerInfo,
   ModelRef,
+  ScheduledMessage,
   PermissionReply,
   PermissionRequest,
   ProviderInfo,
@@ -47,6 +48,8 @@ export interface ViewState {
   attachments: Attachment[];
   permissions: PermissionRequest[];
   questions: QuestionRequest[];
+  /** Messages waiting to be sent later, in this workspace, soonest first. */
+  scheduled: ScheduledMessage[];
   sessionUsage: SessionUsage | undefined;
   usage: UsageSummary | undefined;
   avatar: { enabled: boolean; style: AvatarStyle };
@@ -56,6 +59,8 @@ export interface ViewState {
   activeFile: { path: string; name: string; selection?: { startLine: number; endLine: number } } | undefined;
   /** Text scale of the chat (1 = VS Code's font size). */
   zoom: number;
+  /** Draw `html-preview` blocks of a reply in the chat, and offer Preview on HTML and SVG code blocks. */
+  htmlPreview: boolean;
   trusted: boolean;
   /** Bumped when the host wants the webview to open a panel (e.g. from a command). */
   /** The last turn failed or was stopped, so the chat offers to send the message again. */
@@ -90,6 +95,13 @@ export type HostToWebview =
 export type WebviewToHost =
   | { type: 'ready' }
   | { type: 'send'; text: string }
+  /** Send the message later: at `at`, or as soon as the chat is free when that time has passed. */
+  | { type: 'schedule'; text: string; at: number }
+  | { type: 'scheduledSendNow'; id: string }
+  | { type: 'scheduledReschedule'; id: string; at: number }
+  | { type: 'scheduledCancel'; id: string }
+  /** Take a scheduled message back into the message box to change it. */
+  | { type: 'scheduledEdit'; id: string }
   | { type: 'abort' }
   | { type: 'retry' }
   | { type: 'newSession' }
@@ -120,6 +132,8 @@ export type WebviewToHost =
   | { type: 'openExternal'; url: string }
   | { type: 'copy'; text: string }
   | { type: 'insertCode'; text: string }
+  /** Save a rendered preview as a self-contained HTML file. */
+  | { type: 'saveHtml'; html: string }
   | { type: 'setAvatar'; enabled?: boolean; style?: AvatarStyle }
   | { type: 'moveView'; to: 'left' | 'right' | 'editor' }
   | { type: 'zoom'; delta: number }

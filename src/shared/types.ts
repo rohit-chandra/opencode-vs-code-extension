@@ -43,6 +43,14 @@ export function addUsage(a: TokenUsage, b: Partial<TokenUsage>, sign = 1): Token
 
 export const totalTokens = (u: TokenUsage): number => u.input + u.output + u.reasoning + u.cacheRead + u.cacheWrite;
 
+/**
+ * Tokens a reply or a session used, without what was only read back from the prompt cache.
+ * Every model call reads the conversation again, mostly from the cache and at a fraction of
+ * the price, so counting those reads makes one question look like hundreds of thousands of
+ * tokens. They are shown on their own.
+ */
+export const usedTokens = (u: TokenUsage): number => u.input + u.cacheWrite + u.output + u.reasoning;
+
 export interface ModelRef {
   providerId: string;
   modelId: string;
@@ -116,6 +124,14 @@ export interface ChatMessage {
   model?: ModelRef;
   agent?: string;
   usage?: TokenUsage;
+  /**
+   * Tokens in the model's context after this reply: what the last model call read plus what
+   * it wrote. A reply that took several calls (tool use) bills the context once per call, so
+   * `usage` can be many times this. Absent when the engine cannot tell.
+   */
+  contextTokens?: number;
+  /** Model calls this reply took, when the engine reports them. */
+  calls?: number;
   error?: string;
 }
 
@@ -133,6 +149,28 @@ export interface Attachment {
   text?: string;
   range?: { startLine: number; endLine: number };
   size?: number;
+}
+
+/** A message waiting to be sent later (see `sendLater.ts`). Kept on this machine only. */
+export interface ScheduledMessage {
+  id: string;
+  engine: EngineId;
+  /** The conversation it will be sent in; undefined means a new session. */
+  sessionId?: string;
+  sessionTitle?: string;
+  text: string;
+  attachments: Attachment[];
+  /** Model, agent and effort chosen when it was scheduled. */
+  model?: ModelRef;
+  agent?: string;
+  effort?: string;
+  /** When to send it. A time that has passed means: as soon as the chat is free. */
+  sendAt: number;
+  createdAt: number;
+  /** Its time came while VS Code was closed and sending late is turned off: it waits for the user. */
+  held?: boolean;
+  /** Why the last attempt to send it did not work. It then waits for the user as well. */
+  problem?: string;
 }
 
 export type PermissionReply = 'once' | 'always' | 'reject';

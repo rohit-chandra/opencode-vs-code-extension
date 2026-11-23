@@ -461,6 +461,151 @@ describe.skipIf(!bin)('ChatController with the real opencode engine', () => {
     expect(host.view!.canRetry).toBe(false);
   });
 
+  it('send later: a message waits for its time, then is sent in its own conversation', async () => {
+    controller.scheduleRetryMs = 300;
+    await controller.handleMessage({ type: 'newSession' });
+    await controller.handleMessage({ type: 'send', text: 'first, right away' });
+    let v = await host.until((s) => s.activity === 'idle' && s.messages.some((m) => m.role === 'assistant' && !!m.completedAt), 60_000, 'first reply');
+    const home = v.sessionId!;
+    const file = path.join(project.dir, 'later.txt');
+    writeFileSync(file, 'LATER_MARKER');
+    await controller.handleMessage({ type: 'addPaths', paths: [file] });
+    const before = Date.now();
+    await controller.handleMessage({ type: 'schedule', text: 'later, please', at: before + 2500 });
+    v = host.view!;
+    expect(v.scheduled).toMatchObject([{ engine: 'opencode', sessionId: home, text: 'later, please', model: v.model, agent: v.agent }]);
+    expect(v.scheduled[0].attachments.map((a) => a.name)).toEqual(['later.txt']);
+    expect(v.scheduled[0].sendAt).toBe(before + 2500);
+    // The attachment went with it; the message box is free for the next message.
+    expect(v.attachments).toEqual([]);
+    expect(v.notice!.text).toMatch(/^Scheduled for today at \d\d:\d\d \(in less than a minute\)\. VS Code has to be open then\.$/);
+    // Kept in VS Code's storage on this machine, so it survives a restart.
+    expect(host.state.get<unknown[]>('sendLater')).toHaveLength(1);
+    // Nothing is sent before its time, and the user can go on in another conversation.
+    await controller.handleMessage({ type: 'newSession' });
+    await controller.handleMessage({ type: 'addPaths', paths: [path.join(project.dir, 'opencode.json')] });
+    expect(host.view!.sessionId).toBeUndefined();
+    expect(host.view!.scheduled).toHaveLength(1);
+    // When the time comes the chat opens that conversation and sends the message, attachment included.
+    const sentAt = mock.log.length;
+    await host.until((s) => s.scheduled.length === 0 && s.sessionId === home && s.messages.some((m) => m.role === 'user' && texts(m.parts).join('') === 'later, please'), 30_000, 'the scheduled message to be sent');
+    expect(Date.now()).toBeGreaterThanOrEqual(before + 2400);
+    v = await host.until((s) => s.activity === 'idle' && texts(s.messages.at(-1)!.parts).join('').includes('later, please'), 60_000, 'the reply to it');
+    expect(JSON.stringify(mock.log.slice(sentAt).map((l) => l.body))).toContain('LATER_MARKER');
+    expect(host.state.get<unknown[]>('sendLater')).toEqual([]);
+    // What the user was attaching in the meantime is still in the message box.
+    expect(v.attachments.map((a) => a.name)).toEqual(['opencode.json']);
+    await controller.handleMessage({ type: 'removeAttachment', id: v.attachments[0].id });
+  });
+
+  it('send later: /later, queueing behind a reply, changing the time, editing and cancelling', async () => {
+    controller.scheduleRetryMs = 300;
+    await controller.handleMessage({ type: 'newSession' });
+    // A time the chat cannot read, and a time with no message.
+    await controller.handleMessage({ type: 'send', text: '/later sometime do it' });
+    expect(host.view!.notice).toMatchObject({ level: 'warn' });
+    expect(host.view!.notice!.text).toMatch(/^Start with when to send it/);
+    await controller.handleMessage({ type: 'send', text: '/later 30m' });
+    expect(host.view!.notice!.text).toMatch(/^Add the message after the time/);
+    expect(host.view!.scheduled).toEqual([]);
+
+    // Queue a message behind a reply that is still being written.
+    await controller.handleMessage({ type: 'send', text: 'count slowly and carefully from one to twenty please [[slow]]' });
+    let v = await host.until((s) => s.activity !== 'idle' && s.messages.some((m) => m.role === 'assistant'), 30_000, 'reply started');
+    const session = v.sessionId!;
+    await controller.handleMessage({ type: 'send', text: '/later next and now the follow-up' });
+    expect(host.view!.notice!.text).toBe('It will be sent when this reply is done.');
+    expect(host.view!.scheduled).toMatchObject([{ text: 'and now the follow-up', sessionId: session }]);
+    // Still the first reply: nothing was interrupted.
+    expect(host.view!.messages.filter((m) => m.role === 'user')).toHaveLength(1);
+    v = await host.until((s) => s.messages.filter((m) => m.role === 'user').length === 2 && s.scheduled.length === 0, 60_000, 'the queued message to follow');
+    expect(texts(v.messages.filter((m) => m.role === 'user')[1].parts).join('')).toBe('and now the follow-up');
+    // It was sent after the first reply had finished, not into it.
+    expect(v.messages.filter((m) => m.role === 'assistant')[0].completedAt).toBeDefined();
+    await host.until((s) => s.activity === 'idle', 60_000, 'the follow-up to finish');
+
+    // Stop means stop: a message queued behind a reply the user stops waits for the user.
+    await controller.handleMessage({ type: 'send', text: 'count slowly and carefully from one to twenty please [[slow]]' });
+    await host.until((s) => s.activity !== 'idle', 30_000, 'second slow reply');
+    await controller.handleMessage({ type: 'schedule', text: 'do not send this by yourself', at: Date.now() });
+    await controller.handleMessage({ type: 'abort' });
+    v = await host.until((s) => s.activity === 'idle' && !!s.scheduled[0]?.problem, 30_000, 'the queued message to be held');
+    expect(v.scheduled[0].problem).toBe('You stopped the reply it was waiting for.');
+    await sleep(900);
+    expect(host.view!.scheduled).toHaveLength(1);
+    const users = host.view!.messages.filter((m) => m.role === 'user').length;
+    // Send now sends it.
+    await controller.handleMessage({ type: 'scheduledSendNow', id: v.scheduled[0].id });
+    await host.until((s) => s.scheduled.length === 0 && s.messages.filter((m) => m.role === 'user').length === users + 1, 30_000, 'send now');
+    await host.until((s) => s.activity === 'idle', 60_000, 'its reply');
+
+    // Later today: change the time, take it back into the message box, cancel another.
+    await controller.handleMessage({ type: 'send', text: '/later 2h run the nightly checks' });
+    await controller.handleMessage({ type: 'send', text: '/later tomorrow 9am write the summary' });
+    v = host.view!;
+    expect(v.scheduled.map((m) => m.text)).toEqual(['run the nightly checks', 'write the summary']);
+    const [nightly, summary] = v.scheduled;
+    expect(Math.abs(nightly.sendAt - (Date.now() + 2 * 3600_000))).toBeLessThan(5000);
+    expect(new Date(summary.sendAt).getHours()).toBe(9);
+    await controller.handleMessage({ type: 'scheduledReschedule', id: nightly.id, at: summary.sendAt + 3600_000 });
+    // Soonest first.
+    expect(host.view!.scheduled.map((m) => m.text)).toEqual(['write the summary', 'run the nightly checks']);
+    const posted = host.posted.length;
+    await controller.handleMessage({ type: 'scheduledEdit', id: summary.id });
+    expect(host.posted.slice(posted)).toContainEqual({ type: 'insertText', text: 'write the summary' });
+    await controller.handleMessage({ type: 'scheduledCancel', id: nightly.id });
+    expect(host.view!.scheduled).toEqual([]);
+    expect(host.state.get<unknown[]>('sendLater')).toEqual([]);
+    // Too far away, and not in an untrusted workspace.
+    await controller.handleMessage({ type: 'schedule', text: 'far', at: Date.now() + 90 * 86_400_000 });
+    expect(host.view!.notice!.text).toMatch(/more than 60 days away/);
+    expect(host.view!.scheduled).toEqual([]);
+    await controller.handleMessage({ type: 'send', text: '/later' });
+    expect(host.view!.notice!.text).toMatch(/^Send a message later with \/later <when> <message>/);
+  });
+
+  it('send later: scheduled messages come back after a restart, and missed ones wait when that is the setting', async () => {
+    const now = Date.now();
+    const saved = [
+      { id: 'later_missed', engine: 'opencode', text: 'was due an hour ago', attachments: [], sendAt: now - 3600_000, createdAt: now - 7200_000 },
+      { id: 'later_future', engine: 'opencode', text: 'due tomorrow', attachments: [], sendAt: now + 86_400_000, createdAt: now },
+      { id: 'later_gone', engine: 'not-an-engine', text: 'engine removed', attachments: [], sendAt: now + 1000, createdAt: now },
+      { nonsense: true },
+    ];
+    const restart = (sendMissed: boolean) => {
+      const store = new MemoryStore();
+      void store.update('sendLater', saved);
+      const h = new FakeHost(ctx);
+      h.state = store;
+      ctx.settings['chat.sendLater.sendMissed'] = sendMissed;
+      const c = new ChatController(engines, new UsageLedger(new MemoryStore()), h);
+      const scheduled = c.viewState.scheduled;
+      c.dispose();
+      delete ctx.settings['chat.sendLater.sendMissed'];
+      return scheduled;
+    };
+    // By default a missed message is sent when the chat is running again: it is simply due.
+    expect(restart(true).map((m) => [m.id, m.held])).toEqual([['later_missed', undefined], ['later_future', undefined]]);
+    // Turned off: it waits under Scheduled until the user sends it.
+    expect(restart(false).map((m) => [m.id, m.held])).toEqual([['later_missed', true], ['later_future', undefined]]);
+  });
+
+  it('/preview asks for a visual answer: the instructions go to the model, the chat shows the request', async () => {
+    await controller.handleMessage({ type: 'newSession' });
+    await controller.handleMessage({ type: 'send', text: '/preview' });
+    expect(host.view!.notice!.text).toMatch(/^Ask for a visual answer with \/preview <request>/);
+    const before = mock.log.length;
+    await controller.handleMessage({ type: 'send', text: '/preview a chart of the build times' });
+    const v = await host.until((s) => s.activity === 'idle' && s.messages.some((m) => m.role === 'assistant' && !!m.completedAt), 60_000, 'reply');
+    const sent = texts(v.messages[0].parts).join('');
+    expect(sent.startsWith('a chart of the build times\n\n<!-- opencode-hub: html-preview -->')).toBe(true);
+    expect(JSON.stringify(mock.log.slice(before).map((l) => l.body))).toContain('fenced code block whose language is `html-preview`');
+    expect(v.htmlPreview).toBe(true);
+    // Saving a preview goes through the host's save dialog.
+    await controller.handleMessage({ type: 'saveHtml', html: '<!DOCTYPE html><p>x</p>' });
+    expect(host.saved.at(-1)).toEqual({ name: 'preview.html', content: '<!DOCTYPE html><p>x</p>' });
+  });
+
   it('remembers recently used models, newest first', async () => {
     const all = host.view!.providers.flatMap((p) => p.models);
     const [a, b] = [all.find((m) => m.modelId === 'mock-large')!, all.find((m) => m.modelId === 'mock-small')!];

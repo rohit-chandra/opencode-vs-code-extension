@@ -78,6 +78,10 @@ describe.skipIf(!claudeBin)('Claude Code engine (real `claude` CLI + mock Anthro
     expect((assistant.parts[1] as { text: string }).text).toMatch(/^MOCK\[claude-[\w.-]+\]: [\s\S]*hello claude$/);
     expect(assistant.usage).toMatchObject({ input: 100, output: 30, cacheRead: 20, cacheWrite: 0 });
     expect(assistant.usage!.cost).toBeGreaterThan(0);
+    // One model call: the context after it is what that call read and wrote.
+    expect(assistant).toMatchObject({ contextTokens: 150, calls: 1 });
+    // The reply names the model that answered, not the alias that was asked for.
+    expect(assistant.model!.modelId).toMatch(/^claude-sonnet-\d/);
     expect(rec.events.filter((e) => e.type === 'part.delta').length).toBeGreaterThan(3);
     // Slash commands are learned from the CLI's init message.
     const commands = await engine.listCommands();
@@ -133,6 +137,40 @@ describe.skipIf(!claudeBin)('Claude Code engine (real `claude` CLI + mock Anthro
     expect((assistant.parts.at(-1) as { text: string }).text).toContain('TOOL_RESULT:');
     // Two API round trips are summed by the CLI.
     expect(assistant.usage!.output).toBe(60);
+    // The context is one round trip's worth, not the sum: that is what the context meter shows.
+    expect(assistant).toMatchObject({ contextTokens: 150, calls: 2 });
+  });
+
+  it('charges each reply of a resumed conversation its own cost', async () => {
+    // Claude Code reports `total_cost_usd` for the whole conversation, so the second and third
+    // turns of a resumed session would each be charged everything before them as well.
+    const rec = record(engine);
+    const session = await engine.createSession();
+    const model = { providerId: 'claude-code', modelId: 'sonnet' };
+    for (const text of ['cost one', 'cost two', 'cost three']) {
+      await engine.sendPrompt(session.id, { text, attachments: [], model });
+      await rec.waitIdle(session.id, 100_000);
+    }
+    const replies = rec.messages(session.id).filter((m) => m.role === 'assistant');
+    expect(replies.map((m) => m.error)).toEqual([undefined, undefined, undefined]);
+    // The mock bills every call the same, so every reply costs the same.
+    for (const m of replies) expect(m.usage).toMatchObject({ input: 100, output: 30, cacheRead: 20 });
+    const [first, second, third] = replies.map((m) => m.usage!.cost);
+    expect(first).toBeGreaterThan(0);
+    expect(second).toBeCloseTo(first, 6);
+    expect(third).toBeCloseTo(first, 6);
+    // And a session saved by an earlier version, with the running cost in every reply, is put right when opened.
+    const stored = await engine.getMessages(session.id);
+    const saved = stored.filter((m) => m.role === 'assistant');
+    saved[1].usage = { ...saved[1].usage!, cost: first * 2 };
+    saved[2].usage = { ...saved[2].usage!, cost: first * 3 };
+    const internals = engine as unknown as { store: { get(id: string): Promise<{ meta: Record<string, unknown> }> } };
+    const meta = (await internals.store.get(session.id)).meta;
+    delete meta.costPerTurn;
+    delete meta.claudeCostTotal;
+    const repaired = (await engine.getMessages(session.id)).filter((m) => m.role === 'assistant').map((m) => m.usage!.cost);
+    for (const cost of repaired) expect(cost).toBeCloseTo(first, 6);
+    expect(meta.claudeCostTotal).toBeCloseTo(first * 3, 6);
   });
 
   it('lists the models the account can use, with their real names', async () => {
@@ -166,7 +204,8 @@ describe.skipIf(!claudeBin)('Claude Code engine (real `claude` CLI + mock Anthro
     ctx.settings['claudeCode.models'] = ['claude-opus-5'];
     try {
       const [provider] = await engine.listProviders();
-      expect(provider.models.at(-1)).toMatchObject({ modelId: 'claude-opus-5', description: 'Added by you' });
+      expect(provider.models.find((m) => m.modelId === 'claude-opus-5')).toMatchObject({ name: 'Opus 5', description: 'Added by you' });
+      expect(provider.models.filter((m) => m.modelId === 'claude-opus-5')).toHaveLength(1);
       before = sent().length;
       await engine.sendPrompt(session.id, { text: 'an earlier version', attachments: [], model: { providerId: 'claude-code', modelId: 'claude-opus-5' } });
       await rec.waitIdle(session.id, 90_000);
@@ -479,6 +518,26 @@ describe.skipIf(!codexBin)('Codex engine (real `codex` CLI + mock Responses API)
     expect(messages[3].parts.find((p) => p.type === 'text')).toMatchObject({ text: 'MOCK[mock-small]: codex turn two' });
     const last = mock.log.filter((l) => l.path === '/responses').pop()!;
     expect(JSON.stringify(last.body.input)).toContain('codex turn one');
+    // Codex reports a resumed thread's running total. Each reply still gets only its own turn:
+    // the mock bills every call the same, so the second reply must not show twice the first.
+    await engine.sendPrompt(session.id, { text: 'codex turn three', attachments: [], model });
+    await rec.waitIdle(session.id, 100_000);
+    const replies = rec.messages(session.id).filter((m) => m.role === 'assistant');
+    for (const m of replies) expect(m.usage).toMatchObject({ input: 100, output: 30, cacheRead: 20, reasoning: 0 });
+    // A session saved by an earlier version, with the running total in every reply, is put right when opened.
+    const saved = (await engine.getMessages(session.id)).filter((m) => m.role === 'assistant');
+    saved[1].usage = { ...saved[1].usage!, input: 200, output: 60, cacheRead: 40 };
+    saved[2].usage = { ...saved[2].usage!, input: 300, output: 90, cacheRead: 60 };
+    const internals = engine as unknown as { store: { get(id: string): Promise<{ meta: Record<string, unknown> }> } };
+    const meta = (await internals.store.get(session.id)).meta;
+    delete meta.usagePerTurn;
+    delete meta.codexUsageTotal;
+    for (const m of (await engine.getMessages(session.id)).filter((x) => x.role === 'assistant')) expect(m.usage).toMatchObject({ input: 100, output: 30, cacheRead: 20 });
+    expect(meta.codexUsageTotal).toEqual({ input: 360, cached: 60, cacheWrite: 0, output: 90, reasoning: 0 });
+    // The turn after that continues from the repaired total.
+    await engine.sendPrompt(session.id, { text: 'codex turn four', attachments: [], model });
+    await rec.waitIdle(session.id, 100_000);
+    expect(rec.messages(session.id).at(-1)!.usage).toMatchObject({ input: 100, output: 30, cacheRead: 20 });
   });
 
   it('lists MCP servers from the Codex config and passes the toggle to the CLI', async () => {

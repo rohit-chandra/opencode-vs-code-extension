@@ -2,9 +2,11 @@ import { Component, h } from 'preact';
 import type { ComponentChildren, FunctionComponent } from 'preact';
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'preact/hooks';
 import type { ChatMessage, Part } from '../../../src/shared/types';
-import { compact, money, tokensIn, tokensOut } from '../format';
+import { compact, money, tokensCached, tokensIn, tokensOut, usageDetail } from '../format';
 import { IconBrain, IconCheck, IconChevron, IconClose, IconCopy, IconFile, IconImage, IconRefresh, IconTool, IconWarn } from '../icons';
+import { splitPreviewPrompt } from '../../../src/shared/htmlPreview';
 import { renderBlocks } from '../markdown';
+import { mountPreviews, showPreview, standaloneHtml } from '../preview';
 import { send } from '../store';
 
 /** Skip re-rendering a component whose props are shallowly equal (a tiny `memo`, without preact/compat). */
@@ -23,7 +25,12 @@ function memo<P extends object>(render: FunctionComponent<P>): FunctionComponent
 }
 
 const MdBlock = memo(function MdBlock({ html }: { html: string }) {
-  return <div class="mdb" dangerouslySetInnerHTML={{ __html: html }} />;
+  const el = useRef<HTMLDivElement>(null);
+  // A finished `html-preview` block is drawn in place of its source (see preview.ts).
+  useLayoutEffect(() => {
+    if (el.current && html.includes('data-preview="auto"')) mountPreviews(el.current);
+  }, [html]);
+  return <div class="mdb" ref={el} dangerouslySetInnerHTML={{ __html: html }} />;
 });
 
 /** Markdown rendered block by block, so a streaming reply only touches the DOM of its last block. */
@@ -176,13 +183,25 @@ function CopyReply({ message }: { message: ChatMessage }) {
 const Message = memo(function Message({ message, live }: { message: ChatMessage; live: boolean }) {
   if (message.role === 'user') {
     const files = message.parts.filter((p) => p.type === 'file');
-    const text = message.parts
-      .filter((p): p is Extract<Part, { type: 'text' }> => p.type === 'text')
-      .map((p) => p.text)
-      .join('\n\n');
+    // `/preview` adds instructions for the model after a marker; the bubble shows what the user typed.
+    const { text, preview } = splitPreviewPrompt(
+      message.parts
+        .filter((p): p is Extract<Part, { type: 'text' }> => p.type === 'text')
+        .map((p) => p.text)
+        .join('\n\n'),
+    );
     return (
       <div class="msg user" data-message-id={message.id}>
-        {text && <div class="bubble">{text}</div>}
+        {text && (
+          <div class="bubble">
+            {text}
+            {preview && (
+              <span class="bubble-tag" title="Sent with /preview: the model is asked to answer with a visual that is drawn in the chat">
+                HTML preview
+              </span>
+            )}
+          </div>
+        )}
         {files.length > 0 && <div class="chips">{files.map((p) => <FileChip key={p.id} part={p as Extract<Part, { type: 'file' }>} />)}</div>}
       </div>
     );
@@ -220,9 +239,16 @@ const Message = memo(function Message({ message, live }: { message: ChatMessage;
         <div class="msg-foot">
           {canCopy && <CopyReply message={message} />}
           {u && message.completedAt && (
-            <div class="meta" title={`${message.model ? `${message.model.modelId} · ` : ''}Input ${u.input.toLocaleString()} · cache read ${u.cacheRead.toLocaleString()} · cache write ${u.cacheWrite.toLocaleString()} · output ${u.output.toLocaleString()} · reasoning ${u.reasoning.toLocaleString()}${u.cost > 0 ? ` · ${money(u.cost)} (reported by the engine, or estimated from list prices)` : ''}`}>
+            <div
+              class="meta"
+              title={`${message.model ? `${message.model.modelId}: ` : ''}${usageDetail(u)}.${(message.calls ?? 1) > 1 ? ` This reply took ${message.calls} model calls, and each one reads the conversation again.` : ''}${message.contextTokens ? ` Context after this reply: ${message.contextTokens.toLocaleString()} tokens.` : ''}${u.cost > 0 ? ` ${money(u.cost)} is what the engine reported, or an estimate from list prices.` : ''}`}
+            >
+              {/* The model that answered, as the provider names it: a model's own idea of its name can be out of date. */}
+              {canCopy && message.model && <span class="meta-model">{message.model.modelId}</span>}
               <span>{compact(tokensIn(u))} in</span>
+              {tokensCached(u) > 0 && <span class="meta-cached">{compact(tokensCached(u))} cached</span>}
               <span>{compact(tokensOut(u))} out</span>
+              {(message.calls ?? 1) > 1 && <span>{message.calls} calls</span>}
               {u.cost > 0 && <span>{money(u.cost)}</span>}
             </div>
           )}
@@ -232,32 +258,139 @@ const Message = memo(function Message({ message, live }: { message: ChatMessage;
   );
 });
 
-export function MessageList({ messages, busy, canRetry }: { messages: ChatMessage[]; busy: boolean; canRetry: boolean }) {
+/** How far from the end the reader has to be before the "Latest" button is offered. */
+const JUMP_AFTER_PX = 160;
+/** A scroll counts as the reader's own for this long after their last wheel, key or touch. */
+const USER_SCROLL_MS = 900;
+
+/**
+ * Keeps the newest text in view while a reply streams, without ever fighting the reader.
+ *
+ * The list follows the end until the reader scrolls up, and follows again once they are back
+ * at the end. Three things make that smooth:
+ *
+ *  - Whether to follow is decided from what the reader did (wheel, keys, touch, dragging the
+ *    scroll bar), not from how close to the end the view happens to be. A distance check
+ *    snaps the view back during the first pixels of a scroll up, because a new chunk of the
+ *    reply arrives before the scroll has got anywhere.
+ *  - The view is moved when the content changes size (a ResizeObserver), not on every render.
+ *  - Nothing in the scrolled content appears or disappears with the scroll position: the
+ *    "Latest" button floats over the list instead of sitting in it.
+ */
+function useFollowEnd(sessionId: string | undefined) {
   const scroller = useRef<HTMLDivElement>(null);
-  const stick = useRef(true);
+  const content = useRef<HTMLDivElement>(null);
+  const follow = useRef(true);
+  const lastTop = useRef(0);
+  const userAt = useRef(0);
+  const dragging = useRef(false);
   const [jump, setJump] = useState(false);
+
+  const pin = () => {
+    const el = scroller.current;
+    if (!el || !follow.current) return;
+    const top = el.scrollHeight - el.clientHeight;
+    if (Math.abs(el.scrollTop - top) > 0.5) el.scrollTop = top;
+    lastTop.current = el.scrollTop;
+  };
 
   const onScroll = () => {
     const el = scroller.current;
     if (!el) return;
-    stick.current = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
-    setJump(!stick.current);
+    const top = el.scrollTop;
+    const distance = el.scrollHeight - top - el.clientHeight;
+    const byUser = dragging.current || Date.now() - userAt.current < USER_SCROLL_MS;
+    if (distance <= 2) follow.current = true;
+    else if (byUser && top < lastTop.current - 1) follow.current = false;
+    lastTop.current = top;
+    setJump(!follow.current && distance > JUMP_AFTER_PX);
   };
-  // Keep the newest text in view while it streams, unless the reader scrolled up.
-  useLayoutEffect(() => {
-    const el = scroller.current;
-    if (el && stick.current) el.scrollTop = el.scrollHeight;
-  });
+
   useEffect(() => {
-    stick.current = true;
-  }, [messages[0]?.sessionId]);
+    const el = scroller.current;
+    if (!el) return;
+    const touched = () => (userAt.current = Date.now());
+    const onWheel = (e: WheelEvent) => {
+      touched();
+      // Let go at once: the scroll this wheel turn causes arrives a frame later, and a chunk
+      // of the reply that lands in between must not pull the view back down.
+      if (e.deltaY < 0 && el.scrollTop > 0) follow.current = false;
+    };
+    const onKey = (e: KeyboardEvent) => {
+      touched();
+      const typing = e.target instanceof Element && !!e.target.closest('textarea, input, select');
+      if ((e.key === 'ArrowUp' || e.key === 'PageUp' || e.key === 'Home') && el.scrollTop > 0 && !typing) follow.current = false;
+    };
+    // A press on the scroller itself is a press on its scroll bar.
+    const onDown = (e: PointerEvent) => {
+      touched();
+      if (e.target === el) dragging.current = true;
+    };
+    const onUp = () => {
+      if (dragging.current) touched();
+      dragging.current = false;
+    };
+    el.addEventListener('wheel', onWheel, { passive: true });
+    el.addEventListener('touchmove', touched, { passive: true });
+    el.addEventListener('pointerdown', onDown, { passive: true });
+    window.addEventListener('keydown', onKey, { passive: true });
+    window.addEventListener('pointerup', onUp, { passive: true });
+    window.addEventListener('pointercancel', onUp, { passive: true });
+    // The content grew (a chunk, an opened tool card) or the view changed height (the message
+    // box grew, the panel was resized): stay at the end if that is where the reader is.
+    const observer = typeof ResizeObserver === 'undefined' ? undefined : new ResizeObserver(pin);
+    observer?.observe(el);
+    if (content.current) observer?.observe(content.current);
+    return () => {
+      el.removeEventListener('wheel', onWheel);
+      el.removeEventListener('touchmove', touched);
+      el.removeEventListener('pointerdown', onDown);
+      window.removeEventListener('keydown', onKey);
+      window.removeEventListener('pointerup', onUp);
+      window.removeEventListener('pointercancel', onUp);
+      observer?.disconnect();
+    };
+  }, []);
+
+  // Another conversation starts at its end.
+  useLayoutEffect(() => {
+    follow.current = true;
+    setJump(false);
+    pin();
+  }, [sessionId]);
+
+  const toEnd = () => {
+    const el = scroller.current;
+    if (!el) return;
+    follow.current = true;
+    setJump(false);
+    const distance = el.scrollHeight - el.scrollTop - el.clientHeight;
+    // A long way: go there. Close by: glide, so the eye can keep its place.
+    if (distance > el.clientHeight * 3) pin();
+    else el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' });
+  };
+
+  return { scroller, content, jump, onScroll, pin, toEnd };
+}
+
+export function MessageList({ messages, busy, canRetry }: { messages: ChatMessage[]; busy: boolean; canRetry: boolean }) {
+  const { scroller, content, jump, onScroll, pin, toEnd } = useFollowEnd(messages[0]?.sessionId);
+  // Before the first paint of new content, so a sent message never shows a frame out of place.
+  useLayoutEffect(pin, [messages]);
 
   const onClick = (e: MouseEvent) => {
     const target = e.target as HTMLElement;
     const action = target.closest<HTMLElement>('[data-action]');
     if (action) {
       const code = action.closest('.code')?.querySelector('code')?.textContent ?? '';
-      if (action.dataset.action === 'copy') {
+      const block = action.closest<HTMLElement>('.code');
+      if (action.dataset.action === 'preview' && block) {
+        showPreview(block, !block.classList.contains('previewing'));
+      } else if (action.dataset.action === 'expand' && block) {
+        action.textContent = block.classList.toggle('expanded') ? 'Fit' : 'Expand';
+      } else if (action.dataset.action === 'save-html') {
+        send({ type: 'saveHtml', html: standaloneHtml(code) });
+      } else if (action.dataset.action === 'copy') {
         send({ type: 'copy', text: code });
         const label = action.textContent;
         action.textContent = 'Copied';
@@ -278,30 +411,26 @@ export function MessageList({ messages, busy, canRetry }: { messages: ChatMessag
 
   const lastId = messages[messages.length - 1]?.id;
   return (
-    <div class="messages" ref={scroller} onScroll={onScroll} onClick={onClick}>
-      {messages.map((m) => (
-        <Message key={m.id} message={m} live={busy && m.id === lastId} />
-      ))}
-      {canRetry && !busy && messages.length > 0 && (
-        <div class="retry-row">
-          <button type="button" class="btn small retry" title="Send your last message again" onClick={() => send({ type: 'retry' })}>
-            <IconRefresh size={12} /> Retry
-          </button>
-          <button type="button" class="btn small quiet report" title="Tell the maintainers about this (opens a pre-filled GitHub issue)" onClick={() => send({ type: 'openFeedback', kind: 'bug' })}>
-            Report a problem
-          </button>
+    <div class="messages-wrap">
+      <div class="messages" ref={scroller} onScroll={onScroll} onClick={onClick}>
+        <div class="messages-list" ref={content}>
+          {messages.map((m) => (
+            <Message key={m.id} message={m} live={busy && m.id === lastId} />
+          ))}
+          {canRetry && !busy && messages.length > 0 && (
+            <div class="retry-row">
+              <button type="button" class="btn small retry" title="Send your last message again" onClick={() => send({ type: 'retry' })}>
+                <IconRefresh size={12} /> Retry
+              </button>
+              <button type="button" class="btn small quiet report" title="Tell the maintainers about this (opens a pre-filled GitHub issue)" onClick={() => send({ type: 'openFeedback', kind: 'bug' })}>
+                Report a problem
+              </button>
+            </div>
+          )}
         </div>
-      )}
+      </div>
       {jump && (
-        <button
-          type="button"
-          class="jump"
-          onClick={() => {
-            stick.current = true;
-            scroller.current?.scrollTo({ top: scroller.current.scrollHeight, behavior: 'smooth' });
-            setJump(false);
-          }}
-        >
+        <button type="button" class="jump" onClick={toEnd}>
           <IconChevron size={12} /> Latest
         </button>
       )}

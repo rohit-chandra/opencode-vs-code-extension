@@ -2,7 +2,7 @@
   "name": "opencode-hub",
   "displayName": "OpenCode Hub — BYOK AI Chat",
   "description": "Open-source chat for VS Code that works with opencode first, plus Claude Code, Codex (ChatGPT), GitHub Copilot and any OpenAI-compatible or Anthropic model with your own keys. Sessions, /commands, file attachments, MCP toggles, token usage stats and a 3D companion.",
-  "version": "0.6.2",
+  "version": "0.7.0",
   "publisher": "rohit-chandra",
   "license": "MIT",
   "private": true,
@@ -705,6 +705,16 @@
           "type": "boolean",
           "default": true,
           "markdownDescription": "Direct BYOK and Copilot: offer the model a small `ask_user` tool, so it can ask you clarifying questions in the chat (one at a time, with options and room for your own answer) instead of guessing. opencode and Claude Code have a question tool of their own and are not affected. A model that does not take tools goes without it automatically."
+        },
+        "opencodeHub.chat.htmlPreview": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "Draw visual answers in the chat. A reply's `html-preview` code block (what `/preview <request>` asks the model for) is shown as a report, chart, diagram or mock-up instead of markup, and HTML and SVG code blocks get a **Preview** button. Previews take HTML, CSS, tables, inline SVG and `<details>` sections; scripts, forms, links and anything loaded from the network are removed."
+        },
+        "opencodeHub.chat.sendLater.sendMissed": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "Send later: when a scheduled message's time passed while VS Code was closed, send it as soon as the chat is running again. Turn this off to keep missed messages under **Scheduled** until you send them yourself."
         },
         "opencodeHub.chat.providerColors": {
           "type": "boolean",

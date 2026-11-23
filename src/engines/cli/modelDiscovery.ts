@@ -109,6 +109,36 @@ export function claudeModelInfo(m: ClaudeModelEntry): ModelInfo {
   return info;
 }
 
+/** One released Claude model, read off its id: `claude-opus-5-5` is Opus 5.5. */
+export interface ClaudeVersion {
+  id: string;
+  family: string;
+  major: number;
+  minor: number;
+  /** "Opus 5.5" */
+  name: string;
+}
+
+const FAMILY_RANK = ['fable', 'opus', 'sonnet', 'haiku'];
+
+/**
+ * The Claude versions among a list of model ids, most capable family first and newest
+ * version first within a family. Dated snapshots (`-20251101`), speed variants (`-fast`) and
+ * the old naming (`claude-3-5-sonnet`) are left out: each names a model this list already has.
+ * A family that is new to the extension is read the same way, so it needs no code change.
+ */
+export function claudeVersions(ids: string[]): ClaudeVersion[] {
+  const out: ClaudeVersion[] = [];
+  for (const id of ids) {
+    const m = /^claude-([a-z]+)-(\d{1,2})(?:-(\d{1,2}))?$/.exec(id);
+    if (!m) continue;
+    const [, family, major, minor] = m;
+    out.push({ id, family, major: Number(major), minor: Number(minor ?? 0), name: `${family.charAt(0).toUpperCase()}${family.slice(1)} ${major}${minor !== undefined ? `.${minor}` : ''}` });
+  }
+  const rank = (f: string) => (FAMILY_RANK.includes(f) ? FAMILY_RANK.indexOf(f) : FAMILY_RANK.length);
+  return out.sort((a, b) => rank(a.family) - rank(b.family) || a.family.localeCompare(b.family) || b.major - a.major || b.minor - a.minor);
+}
+
 export interface CodexModelEntry {
   id?: string;
   model?: string;

@@ -42,6 +42,11 @@ export function catalogProviderFor(baseUrl: string): string | undefined {
   }
 }
 
+/** Every model id the table has for a provider (the catalogue the weekly price refresh keeps current). */
+export function listedModels(provider: string): string[] {
+  return Object.keys(PRICES[provider] ?? {});
+}
+
 function row(values: number[] | undefined): Pricing | undefined {
   if (!values) return undefined;
   const [input = 0, output = 0, cacheRead, cacheWrite] = values;

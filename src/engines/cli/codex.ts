@@ -7,12 +7,15 @@ import type { Turn } from '../../core/localEngine';
 import { listPrice } from '../../core/listPrices';
 import type { Pricing } from '../../core/listPrices';
 import { findExecutable, runCapture, terminalCommand } from '../../core/process';
-import type { AuthMode, AuthStatus, EngineCapabilities, McpServerInfo, ModelInfo, ModelRef, ProviderInfo } from '../../shared/types';
+import type { StoredSession } from '../../core/localSessions';
+import type { AuthMode, AuthStatus, ChatMessage, EngineCapabilities, McpServerInfo, ModelInfo, ModelRef, ProviderInfo } from '../../shared/types';
 import { codexEfforts, codexModels } from './modelDiscovery';
 import { apiKeySecret, authMode, codexEnv, parseCodexLoginStatus, shellExe } from './auth';
 import { CodexStreamTranslator } from './codexStream';
 import { StateFile, imageBase64, promptForAgent, runJsonl } from './common';
 import { FreshList } from './freshList';
+import { repairCodexUsage } from './usageRepair';
+import type { CodexTotals } from './usageRepair';
 
 interface CodexState {
   disabledMcp: string[];
@@ -195,6 +198,32 @@ export class CodexEngine extends LocalEngine {
     this.emit({ type: 'mcp.changed' });
   }
 
+  /**
+   * The thread's token totals before the next turn. Sessions saved by earlier versions hold
+   * the running total in every reply; those are rewritten to per-turn amounts first.
+   */
+  private usageSoFar(session: StoredSession): CodexTotals | undefined {
+    if (!session.meta.usagePerTurn) {
+      // The reply being written has no usage yet, so it is not touched.
+      const reached = repairCodexUsage(session.messages);
+      session.meta.usagePerTurn = true;
+      if (reached && !session.meta.codexUsageTotal) session.meta.codexUsageTotal = reached;
+    }
+    const kept = session.meta.codexUsageTotal as CodexTotals | undefined;
+    return kept && typeof kept.input === 'number' ? kept : undefined;
+  }
+
+  /** Opening a session saved by an earlier version puts its replies' usage right (see `usageRepair.ts`). */
+  override async getMessages(sessionId: string): Promise<ChatMessage[]> {
+    const session = await this.store.get(sessionId);
+    if (!session) return [];
+    if (!session.meta.usagePerTurn && !this.isRunning(sessionId) && session.messages.some((m) => m.usage)) {
+      this.usageSoFar(session);
+      await this.store.persist(sessionId).catch(() => undefined);
+    }
+    return session.messages;
+  }
+
   protected async runTurn(turn: Turn): Promise<void> {
     if (!this.exe) throw new EngineError('Codex CLI not found.');
     const { session, input, assistant, signal } = turn;
@@ -233,7 +262,9 @@ export class CodexEngine extends LocalEngine {
     }
     args.push('-'); // prompt comes from stdin, which avoids shell quoting on every platform
 
-    const translator = new CodexStreamTranslator(assistant);
+    // Codex reports a resumed thread's tokens from its first turn on; what the thread had
+    // reached is kept with the session, so each reply is given only its own.
+    const translator = new CodexStreamTranslator(assistant, threadId ? this.usageSoFar(session) : undefined);
     try {
       const { code, stderr } = await runJsonl({
         file: this.exe,
@@ -250,6 +281,10 @@ export class CodexEngine extends LocalEngine {
       });
       if (signal.aborted) return;
       if (translator.threadId) session.meta.codexThreadId = translator.threadId;
+      if (translator.totals) {
+        session.meta.codexUsageTotal = translator.totals;
+        session.meta.usagePerTurn = true;
+      }
       // Codex has just talked to OpenAI and knows the account's plan now: check the model list again.
       this.modelList.refresh(this.account.mode(), 20_000);
       if (translator.error) throw new Error(translator.error);

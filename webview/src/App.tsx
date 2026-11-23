@@ -7,10 +7,12 @@ import { MessageList } from './components/Messages';
 import { FeedbackPanel, McpPanel, ModelsPanel, SessionsPanel, UsagePanel } from './components/Panels';
 import type { PanelName } from './components/Panels';
 import { Requests } from './components/Requests';
-import { money, tokensIn, tokensOut } from './format';
+import { Scheduled } from './components/Scheduled';
+import { money, tokensAll, usageDetail } from './format';
 import { deriveMood, moodDeadline, useStore, useTick } from './hooks';
 import { IconChart, IconChevron, IconClose, IconEye, IconHistory, IconKey, IconPlug, IconPlus, IconRefresh, IconUser, IconWarn } from './icons';
 import type { ViewState } from '../../src/shared/protocol';
+import { setPreviews } from './markdown';
 import { send } from './store';
 
 const SUGGESTIONS = [
@@ -106,6 +108,8 @@ export function App() {
   useEffect(() => {
     document.documentElement.style.setProperty('--oh-zoom', String(s.zoom || 1));
   }, [s.zoom]);
+  // Applies to replies drawn from now on; what is on screen keeps its form.
+  setPreviews(s.htmlPreview !== false);
   // The frame takes the colour of the model's maker, so the provider is visible at a glance.
   const brand = s.providerColors ? providerBrand(s.engine, s.model) : undefined;
   useEffect(() => {
@@ -129,7 +133,7 @@ export function App() {
   const empty = s.messages.length === 0;
   const mcpOn = s.mcp.filter((m) => m.status === 'connected').length;
   const mcpBad = s.mcp.some((m) => m.status === 'failed' || m.status === 'needs_auth');
-  const sessionTokens = s.sessionUsage ? tokensIn(s.sessionUsage.usage) + tokensOut(s.sessionUsage.usage) : 0;
+  const sessionTokens = s.sessionUsage ? tokensAll(s.sessionUsage.usage) : 0;
   const toggle = (name: PanelName) => setPanel((p) => (p === name ? 'none' : name));
 
   const onDrop = (e: DragEvent) => {
@@ -181,7 +185,7 @@ export function App() {
         <button
           type="button"
           class={`icon-btn usage-btn ${panel === 'usage' ? 'on' : ''}`}
-          title={sessionTokens ? `This session: ${tokensIn(s.sessionUsage!.usage).toLocaleString()} tokens in, ${tokensOut(s.sessionUsage!.usage).toLocaleString()} out${s.sessionUsage!.usage.cost ? `, ${money(s.sessionUsage!.usage.cost)}` : ''}. Click for all usage.` : 'Token usage'}
+          title={sessionTokens ? `This session: ${usageDetail(s.sessionUsage!.usage)}${s.sessionUsage!.usage.cost ? `, ${money(s.sessionUsage!.usage.cost)}` : ''}. Click for all usage.` : 'Token usage'}
           aria-label={`Token usage${sessionTokens ? `, ${sessionTokens.toLocaleString()} tokens in this session` : ''}`}
           onClick={() => toggle('usage')}
         >
@@ -302,6 +306,7 @@ export function App() {
       </div>
 
       <Requests permissions={s.permissions} questions={s.questions} />
+      <Scheduled s={s} />
       <Composer s={s} onOpenPanel={(p) => setPanel(p)} />
     </div>
   );

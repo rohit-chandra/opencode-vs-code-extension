@@ -11,6 +11,12 @@ const svg = (path: JSX.Element, viewBox = '0 0 16 16') =>
   };
 
 export const IconPlus = svg(<path d="M8 3v10M3 8h10" />);
+export const IconClock = svg(
+  <>
+    <circle cx="8" cy="8" r="5.5" />
+    <path d="M8 5v3.2l2 1.3" />
+  </>,
+);
 /** Two chain links: carry something from one place into another. */
 export const IconLink = svg(
   <>

@@ -14,9 +14,50 @@ export function money(n: number): string {
   return `$${n.toFixed(1)}`;
 }
 
-export const tokensIn = (u: TokenUsage): number => u.input + u.cacheRead + u.cacheWrite;
+/*
+ * How token counts are shown everywhere in the chat.
+ *
+ * A model call reads the whole conversation again. Providers keep what they have already
+ * seen in a prompt cache and charge a small fraction for reading it back, so a reply that
+ * took ten tool calls "reads" its context ten times without costing ten times as much.
+ * Adding those reads to the tokens a reply really used makes one question look like
+ * hundreds of thousands of tokens, so they are counted apart:
+ *
+ *  - in:     input the model processed at full price (new text, and text stored in the cache)
+ *  - cached: input read back from the cache
+ *  - out:    what the model wrote, thinking included
+ */
+export const tokensIn = (u: TokenUsage): number => u.input + u.cacheWrite;
+export const tokensCached = (u: TokenUsage): number => u.cacheRead;
 export const tokensOut = (u: TokenUsage): number => u.output + u.reasoning;
+/** Tokens used, without what was only read back from the cache. */
 export const tokensAll = (u: TokenUsage): number => tokensIn(u) + tokensOut(u);
+
+
+/** The long form of one reply's or one session's usage, for tooltips. */
+export function usageDetail(u: TokenUsage): string {
+  const n = (x: number) => x.toLocaleString();
+  return [
+    `${n(u.input)} new input tokens`,
+    u.cacheWrite > 0 ? `${n(u.cacheWrite)} stored in the prompt cache` : '',
+    u.cacheRead > 0 ? `${n(u.cacheRead)} read back from the prompt cache (context the model had already seen, charged at a fraction of the price)` : '',
+    `${n(u.output)} output tokens`,
+    u.reasoning > 0 ? `${n(u.reasoning)} thinking tokens` : '',
+  ]
+    .filter(Boolean)
+    .join(', ');
+}
+
+/**
+ * Tokens in the model's context after a reply, when that can be told: the engine said so, or
+ * the reply was a single model call. A reply of several calls without that figure has the
+ * context counted once per call in its usage, which says nothing about its size.
+ */
+export function contextAfter(m: { contextTokens?: number; calls?: number; usage?: TokenUsage }, engine: string): number | undefined {
+  if (m.contextTokens) return m.contextTokens;
+  if (!m.usage || engine === 'claude-code' || engine === 'codex') return undefined;
+  return m.usage.input + m.usage.cacheRead + m.usage.cacheWrite + m.usage.output + m.usage.reasoning;
+}
 
 export function relativeTime(ts: number, now = Date.now()): string {
   const s = Math.max(0, Math.round((now - ts) / 1000));

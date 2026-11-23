@@ -12,7 +12,7 @@ import { VscodeLmEngine } from './engines/vscodeLm/engine';
 import { McpManager } from './mcp/manager';
 import type { McpServerConfig } from './mcp/manager';
 import { repoSlug } from './shared/feedback';
-import { ENGINE_LABELS, totalTokens } from './shared/types';
+import { ENGINE_LABELS, usedTokens } from './shared/types';
 import type { EngineId } from './shared/types';
 import { ChatViewProvider } from './ui/chatView';
 import { ChatController } from './ui/controller';
@@ -142,7 +142,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<Openco
       await editor.edit((b) => b.replace(editor.selection, text));
     },
     saveText: async (name, content) => {
-      const uri = await vscode.window.showSaveDialog({ defaultUri: vscode.Uri.file(path.join(cwd() ?? '', name)), filters: { Markdown: ['md'] } });
+      const filters: Record<string, string[]> = name.toLowerCase().endsWith('.html') ? { HTML: ['html'] } : { Markdown: ['md'] };
+      const uri = await vscode.window.showSaveDialog({ defaultUri: vscode.Uri.file(path.join(cwd() ?? '', name)), filters });
       if (!uri) return;
       await vscode.workspace.fs.writeFile(uri, Buffer.from(content, 'utf8'));
       await vscode.window.showTextDocument(uri);
@@ -224,9 +225,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<Openco
     const s = controller.viewState;
     const u = s.sessionId ? ledger.sessionUsage(s.engine, s.sessionId)?.usage : undefined;
     const total = ledger.summary(0).total;
-    statusBar.text = `$(pulse) ${compact(u ? totalTokens(u) : 0)} tok${u?.cost ? ` · $${u.cost.toFixed(2)}` : ''}`;
+    statusBar.text = `$(pulse) ${compact(u ? usedTokens(u) : 0)} tok${u?.cost ? ` · $${u.cost.toFixed(2)}` : ''}`;
     statusBar.tooltip = new vscode.MarkdownString(
-      `**OpenCode Hub** — ${ENGINE_LABELS[s.engine]}\n\nThis session: ${u ? `${u.input.toLocaleString()} in · ${u.output.toLocaleString()} out · ${(u.cacheRead + u.cacheWrite).toLocaleString()} cached` : 'no usage yet'}\n\nAll sessions: ${totalTokens(total).toLocaleString()} tokens${total.cost ? ` · $${total.cost.toFixed(2)}` : ''}\n\nClick for details.`,
+      `**OpenCode Hub** — ${ENGINE_LABELS[s.engine]}\n\nThis session: ${u ? `${(u.input + u.cacheWrite).toLocaleString()} in · ${(u.output + u.reasoning).toLocaleString()} out · ${u.cacheRead.toLocaleString()} read from cache` : 'no usage yet'}\n\nAll sessions: ${usedTokens(total).toLocaleString()} tokens${total.cost ? ` · $${total.cost.toFixed(2)}` : ''} (cache reads not counted)\n\nClick for details.`,
     );
     statusBar.show();
   };

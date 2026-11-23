@@ -133,11 +133,12 @@ await test('conversation: markdown, code, tool cards, reasoning, files and per-m
   assert.equal(await t.page.$eval('.fold.tool.error .tool-name', (el) => el.textContent), 'bash');
   assert.ok(await t.page.$('.code .hljs-keyword'), 'code is syntax highlighted');
   assert.equal(await t.text('.code-lang'), 'ts');
-  // Tokens and cost under the reply; the model's name is in the tooltip, not repeated on every reply.
-  assert.match(await t.text('.msg.assistant .meta'), /^23k in.*852 out.*\$0\.04$/s);
-  assert.match(await t.page.$eval('.msg.assistant .meta', (el) => el.title), /^claude-sonnet-5-5 · Input /);
-  assert.match(await t.text('.pill.session-tokens'), /^24k · \$0\.04$/);
-  assert.match(await t.page.$eval('.usage-btn', (el) => el.title), /23,440 tokens in, 852 out, \$0\.04/);
+  // Under the reply: the model that answered, then what it used. Input read back from the prompt
+  // cache is counted apart from new input, and is not part of the session's total.
+  assert.match(await t.text('.msg.assistant .meta'), /^claude-sonnet-5-5.*8\.2k in.*15k cached.*852 out.*\$0\.04$/s);
+  assert.match(await t.page.$eval('.msg.assistant .meta', (el) => el.title), /^claude-sonnet-5-5: 8,240 new input tokens, 15,200 read back from the prompt cache/);
+  assert.match(await t.text('.pill.session-tokens'), /^9\.1k · \$0\.04$/);
+  assert.match(await t.page.$eval('.usage-btn', (el) => el.title), /8,240 new input tokens, 15,200 read back from the prompt cache.*612 output tokens, 240 thinking tokens, \$0\.04/);
   assert.ok(await t.page.$('.md table'), 'tables render');
 
   // Tool card expands to show input and output.
@@ -369,7 +370,7 @@ await test('model picker: Claude Code and Codex can add a model by name', async 
   await t.page.click('.pill.model');
   await t.page.waitForSelector('.sheet .list .row');
   assert.deepEqual(await t.page.$$eval('.sheet .group:not(.recent) .row-title', (els) => els.map((e) => e.textContent)), models.map((m) => m.name));
-  assert.match(await t.text('.add-model'), /list Claude Code reports for your account/);
+  assert.match(await t.text('.add-model'), /First the models Claude Code reports for your account, then every other Claude version, by name\. Missing one\?/);
   await new Promise((r) => setTimeout(r, 400)); // let the sheet finish sliding in
   await t.shot('18-claude-models');
   await t.clearPosted();
@@ -559,9 +560,10 @@ await test('usage panel: this session, totals, per provider and model, per day',
   await t.page.waitForSelector('.sheet .stats');
   assert.equal((await t.posted('usageRefresh')).length, 1);
   const stats = await t.page.$$eval('.usage-section:first-of-type .stat', (els) => els.map((e) => `${e.querySelector('.stat-label').textContent}=${e.querySelector('.stat-value').textContent}`));
-  assert.deepEqual(stats, ['input=8.2k', 'output=612', 'cached=15k', 'reasoning=240', 'cost=$0.04', 'reply=1']);
+  assert.deepEqual(stats, ['input=8.2k', 'output=612', 'thinking=240', 'cache reads=15k', 'cost=$0.04', 'reply=1']);
   const totals = await t.page.$$eval('.usage-section:nth-of-type(2) .stat-value', (els) => els.map((e) => e.textContent));
-  assert.deepEqual(totals, ['1.3M', '96k', '3.6M', '41k', '$18.4', '412']);
+  // Input is new input plus what was stored in the cache; cache reads have a figure of their own.
+  assert.deepEqual(totals, ['1.5M', '96k', '41k', '3.4M', '$18.4', '412']);
   const groups = await t.page.$$eval('.usage-group', (els) => els.map((e) => `${e.querySelector('.usage-provider').textContent}|${e.querySelector('.tag').textContent}|${e.querySelectorAll('tbody tr').length}`));
   assert.deepEqual(groups, ['Anthropic|opencode|2', 'openrouter|Direct BYOK|1', 'claude-code|Claude Code|1', 'ollama|Direct BYOK|1']);
   // Bars are proportional: the biggest row is full width, a row a tenth its size is clearly shorter.
@@ -587,7 +589,7 @@ await test('sessions panel: search, switch, rename, delete, new', async () => {
   await t.page.waitForSelector('.sheet .row.session');
   assert.equal(await t.page.$$eval('.row.session', (els) => els.length), 3);
   assert.equal(await t.text('.row.session.active .row-title'), 'Refactor the auth middleware');
-  assert.match(await t.text('.row.session.active .row-sub'), /min ago, 24k tokens/);
+  assert.match(await t.text('.row.session.active .row-sub'), /min ago, 9\.1k tokens/);
   await t.shot('09-sessions-panel-dark');
   await t.page.type('.sheet .search input', 'flaky');
   await t.page.waitForFunction(() => document.querySelectorAll('.row.session').length === 1);
@@ -889,7 +891,7 @@ await test('copy button on every response', async () => {
   await t.page.click('.msg.assistant .copy-reply');
   assert.deepEqual(await t.posted('copy'), [{ type: 'copy', text: reply }]);
   await t.page.waitForFunction(() => /Copied/.test(document.querySelector('.copy-reply')?.textContent ?? ''));
-  assert.match(await t.text('.msg.assistant .msg-foot .meta'), /23k in/);
+  assert.match(await t.text('.msg.assistant .msg-foot .meta'), /8\.2k in/);
   await t.shot('19-copy-response-dark');
   await t.page.waitForFunction(() => /^Copy$/.test(document.querySelector('.copy-reply')?.textContent ?? ''), { timeout: 4000 });
   // A reply that is still streaming offers no copy button yet; it appears once it is done.
@@ -970,8 +972,8 @@ await test('Ask / Auto approvals, and tokens for the open session', async () => 
   await t.page.waitForSelector('.pill.approvals');
   assert.equal(await t.text('.pill.approvals'), 'Ask');
   // The open session's tokens sit in the composer, always in view.
-  assert.match(await t.text('.pill.session-tokens'), /^24k · \$0\.04$/);
-  assert.match(await t.page.$eval('.pill.session-tokens', (el) => el.title), /This session: 23,440 tokens in, 852 out, \$0\.04 over 1 reply/);
+  assert.match(await t.text('.pill.session-tokens'), /^9\.1k · \$0\.04$/);
+  assert.match(await t.page.$eval('.pill.session-tokens', (el) => el.title), /This session used 9,092 tokens \(\$0\.04\) over 1 reply: 8,240 new input tokens.*Cache reads are not part of the number shown/);
   await t.clearPosted();
   await t.page.click('.pill.session-tokens');
   assert.deepEqual(await t.posted('send'), [{ type: 'send', text: '/usage' }]);
@@ -1002,7 +1004,8 @@ await test('Ask / Auto approvals, and tokens for the open session', async () => 
   await t.page.waitForSelector('.reply-rows');
   assert.match(await t.text('.usage-section h3'), /This session: Refactor the auth middleware/);
   const rows = await t.page.$$eval('.usage-table.replies tbody tr', (els) => els.map((e) => [...e.children].map((c) => c.textContent.trim()).join('|')));
-  assert.deepEqual(rows, ['2|claude-haiku-5-5|2.1k|300|$0.0020', '1|claude-sonnet-5-5|23k|852|$0.04']);
+  // In, cached (read back from the prompt cache), out, cost.
+  assert.deepEqual(rows, ['2|claude-haiku-5-5|2.1k||300|$0.0020', '1|claude-sonnet-5-5|8.2k|15k|852|$0.04']);
   await t.shot('23-usage-per-reply-dark');
   assert.deepEqual(t.consoleErrors, []);
   await t.page.close();
@@ -1250,6 +1253,354 @@ await test('light theme and a narrow sidebar', async () => {
   assert.deepEqual([...t.consoleErrors, ...t2.consoleErrors], []);
   await t.page.close();
   await t2.page.close();
+});
+
+
+await test('scrolling: follows a streaming reply, lets go when you scroll up, and nothing jumps', async () => {
+  const t = await open('dark', 420, 640);
+  const long = (n) => Array.from({ length: n }, (_, i) => `Paragraph ${i + 1} of a long answer, with enough words in it to wrap over a couple of lines in a narrow side bar.`).join('\n\n');
+  const history = [];
+  for (let i = 0; i < 24; i++) {
+    history.push({ id: `u${i}`, sessionId: 'ses_1', role: 'user', createdAt: 1000 + i * 10, parts: [{ id: `up${i}`, type: 'text', text: `Question ${i + 1}` }] });
+    history.push({ id: `a${i}`, sessionId: 'ses_1', role: 'assistant', createdAt: 1005 + i * 10, completedAt: 1006 + i * 10, parts: [{ id: `ap${i}`, type: 'text', text: long(2 + (i % 5) * 3) }] });
+  }
+  const live = { id: 'live', sessionId: 'ses_1', role: 'assistant', createdAt: 5000, parts: [{ id: 'lp', type: 'text', text: 'Start. ' }] };
+  await t.host({ type: 'state', state: { ...conversation, avatar: { enabled: false, style: 'buddy' }, activity: 'busy', messages: [...history, live] } });
+  await t.page.waitForSelector('[data-message-id="live"]');
+  const gap = () => t.page.$eval('.messages', (el) => Math.round(el.scrollHeight - el.scrollTop - el.clientHeight));
+  const chunk = (text) => t.host({ type: 'event', event: { type: 'part.delta', sessionId: 'ses_1', messageId: 'live', partId: 'lp', delta: text } });
+  // A session opens at its end and stays there while the reply grows.
+  assert.ok((await gap()) <= 2, 'opens at the end');
+  for (let i = 0; i < 6; i++) await chunk(`${long(1)}\n\n`);
+  assert.ok((await gap()) <= 2, `follows the streaming reply (${await gap()}px from the end)`);
+
+  // Messages are not sized by a guess before they are drawn, so the list is as tall when you
+  // arrive at the top as it was at the bottom: the scroll bar does not jump on the way.
+  assert.equal(await t.page.$eval('.msg', (el) => getComputedStyle(el).contentVisibility), 'visible');
+  const heightAtEnd = await t.page.$eval('.messages', (el) => el.scrollHeight);
+
+  // Scroll up a little while text keeps arriving: the view must stay where the reader put it.
+  const box = await (await t.page.$('.messages')).boundingBox();
+  await t.page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  await t.page.mouse.wheel({ deltaY: -30 });
+  await sleep(80);
+  const afterWheel = await gap();
+  assert.ok(afterWheel > 2, `a small scroll up leaves the end (${afterWheel}px)`);
+  for (let i = 0; i < 4; i++) await chunk(`${long(1)}\n\n`);
+  assert.ok((await gap()) > afterWheel, 'new text does not pull the view back down');
+  const top = await t.page.$eval('.messages', (el) => el.scrollTop);
+  await chunk(`${long(2)}\n\n`);
+  assert.equal(await t.page.$eval('.messages', (el) => el.scrollTop), top, 'what the reader is looking at does not move');
+
+  // "Latest" floats over the list. It is not part of what scrolls, so showing it changes nothing.
+  await t.page.mouse.wheel({ deltaY: -400 });
+  await t.page.waitForSelector('.jump');
+  assert.equal(await t.page.$('.messages .jump'), null);
+  assert.ok(await t.page.$('.messages-wrap > .jump'));
+  const before = await t.page.$eval('.messages', (el) => ({ top: el.scrollTop, height: el.scrollHeight }));
+  await sleep(60);
+  assert.deepEqual(await t.page.$eval('.messages', (el) => ({ top: el.scrollTop, height: el.scrollHeight })), before);
+
+  // All the way up and back down: the content's height never changed underneath.
+  await t.page.$eval('.messages', (el) => (el.scrollTop = 0));
+  await sleep(80);
+  const heightAtTop = await t.page.$eval('.messages', (el) => el.scrollHeight);
+  assert.equal(heightAtTop, before.height, 'the list is as tall at the top as it was further down');
+  assert.ok(heightAtTop > heightAtEnd, 'and it only ever grew with the reply');
+
+  // Latest goes back to the end and follows again.
+  await t.page.click('.jump');
+  await t.page.waitForFunction(() => {
+    const el = document.querySelector('.messages');
+    return el.scrollHeight - el.scrollTop - el.clientHeight <= 2;
+  });
+  await chunk(`${long(2)}\n\nEND`);
+  assert.ok((await gap()) <= 2, 'follows again after Latest');
+  assert.equal(await t.page.$('.jump'), null);
+
+  // Scrolling back down to the end by hand does the same.
+  await t.page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  await t.page.mouse.wheel({ deltaY: -200 });
+  await t.page.waitForFunction(() => {
+    const el = document.querySelector('.messages');
+    return el.scrollHeight - el.scrollTop - el.clientHeight > 100;
+  });
+  await t.page.mouse.wheel({ deltaY: 5000 });
+  await t.page.waitForFunction(() => {
+    const el = document.querySelector('.messages');
+    return el.scrollHeight - el.scrollTop - el.clientHeight <= 2;
+  });
+  await sleep(50);
+  await chunk(' and more.');
+  assert.ok((await gap()) <= 2, 'follows again after scrolling back to the end');
+  await t.shot('24-scrolling-dark');
+  assert.deepEqual(t.consoleErrors, []);
+  await t.page.close();
+});
+
+await test('send later: menu, presets, a time of your own, and the Scheduled list', async () => {
+  const t = await open('dark', 420, 760);
+  await t.host({ type: 'state', state: conversation });
+  await t.page.waitForSelector('.later-btn');
+  // Nothing to schedule yet.
+  assert.equal(await t.page.$eval('.later-btn', (el) => el.disabled), true);
+  await t.page.type('.input-box textarea', 'run the tests again');
+  await t.page.waitForFunction(() => !document.querySelector('.later-btn').disabled);
+  await t.page.click('.later-btn');
+  await t.page.waitForSelector('.when-menu');
+  const labels = await t.page.$$eval('.when-menu .menu-item:not([hidden]) .menu-label', (els) => els.map((e) => e.textContent));
+  assert.deepEqual(labels.slice(0, 3), ['In 30 minutes', 'In 1 hour', 'In 3 hours']);
+  assert.equal(labels.at(-1), 'Choose date and time…');
+  assert.ok(labels.includes('Tomorrow at 9:00'));
+  await t.shot('25-send-later-menu-dark');
+  await t.clearPosted();
+  const clicked = Date.now();
+  await t.page.$$eval('.when-menu .menu-item', (els) => els.find((e) => e.textContent.includes('In 30 minutes')).click());
+  const [sent] = await t.posted('schedule');
+  assert.equal(sent.text, 'run the tests again');
+  assert.ok(Math.abs(sent.at - (clicked + 30 * 60_000)) < 10_000, 'thirty minutes from now');
+  // The message box is empty again and the menu is closed.
+  await t.page.waitForFunction(() => document.querySelector('.input-box textarea').value === '' && !document.querySelector('.when-menu'));
+
+  // A date and time of your own. The menu stays open while you pick.
+  await t.page.type('.input-box textarea', 'ship it');
+  await t.page.click('.later-btn');
+  await t.page.$$eval('.when-menu .menu-item', (els) => els.find((e) => e.textContent.includes('Choose date')).click());
+  await t.page.waitForSelector('.when-custom input');
+  assert.ok(await t.page.$('.when-menu'), 'the menu is still open');
+  const target = new Date(Date.now() + 2 * 86400_000);
+  target.setHours(14, 30, 0, 0);
+  const pad = (n) => String(n).padStart(2, '0');
+  const value = `${target.getFullYear()}-${pad(target.getMonth() + 1)}-${pad(target.getDate())}T14:30`;
+  await t.page.$eval('.when-custom input', (el, v) => {
+    el.value = v;
+    el.dispatchEvent(new window.Event('input', { bubbles: true }));
+  }, value);
+  await t.clearPosted();
+  await t.page.click('.when-custom .btn');
+  assert.deepEqual(await t.posted('schedule'), [{ type: 'schedule', text: 'ship it', at: target.getTime() }]);
+
+  // While a reply is being written, "when this reply is done" comes first and sends a time that has come.
+  await t.host({ type: 'patch', patch: { activity: 'busy' } });
+  await t.page.type('.input-box textarea', 'then commit');
+  await t.page.click('.later-btn');
+  await t.page.waitForSelector('.when-menu');
+  assert.equal(await t.page.$eval('.when-menu .menu-item .menu-label', (el) => el.textContent), 'When this reply is done');
+  await t.clearPosted();
+  const queued = Date.now();
+  await t.page.click('.when-menu .menu-item');
+  const [next] = await t.posted('schedule');
+  assert.ok(next.at <= queued + 1000 && next.text === 'then commit');
+  await t.host({ type: 'patch', patch: { activity: 'idle' } });
+
+  // What is scheduled is listed above the message box: this conversation's first.
+  const now = Date.now();
+  const scheduled = [
+    { id: 'l1', engine: 'claude-code', sessionId: 'other', sessionTitle: 'Fix the flaky test', text: 'check the build', attachments: [], sendAt: now + 5 * 60_000, createdAt: now },
+    { id: 'l2', engine: 'opencode', sessionId: 'ses_1', sessionTitle: 'Refactor the auth middleware', text: 'run the tests again', attachments: [{ id: 'a', kind: 'file', name: 'a.ts', mime: 'text/plain', path: '/w/a.ts' }], sendAt: now + 28 * 60_000, createdAt: now },
+    { id: 'l3', engine: 'opencode', sessionId: 'ses_1', text: 'deploy', attachments: [], sendAt: now - 3600_000, createdAt: now - 7200_000, problem: 'opencode is not available.' },
+  ];
+  await t.host({ type: 'patch', patch: { scheduled } });
+  await t.page.waitForSelector('.scheduled-item');
+  assert.equal(await t.text('.scheduled-head'), 'Scheduled (3)');
+  const items = await t.page.$$eval('.scheduled-item', (els) => els.map((e) => `${e.querySelector('.scheduled-when').textContent} | ${e.querySelector('.scheduled-text').textContent}`));
+  assert.match(items[0], /^Not sent \| deploy$/);
+  assert.match(items[1], /^in 28 min · today at \d\d:\d\d \| run the tests again · 1 attachment$|^in 28 min · tomorrow at \d\d:\d\d \| run the tests again · 1 attachment$/);
+  assert.match(items[2], /^in 5 min · .* in "Fix the flaky test", Claude Code \| check the build$/);
+  assert.equal(await t.text('.scheduled-item.stuck .scheduled-problem'), 'opencode is not available.');
+  await t.shot('26-scheduled-list-dark');
+  // Send now, edit, change the time, cancel.
+  await t.clearPosted();
+  await t.page.click('.scheduled-item:nth-child(2) [aria-label="Send now"]');
+  await t.page.click('.scheduled-item:nth-child(2) [aria-label="Edit"]');
+  await t.page.click('.scheduled-item:nth-child(2) [aria-label="Cancel this scheduled message"]');
+  assert.deepEqual((await t.posted()).filter((m) => m.type.startsWith('scheduled')), [{ type: 'scheduledSendNow', id: 'l2' }, { type: 'scheduledEdit', id: 'l2' }, { type: 'scheduledCancel', id: 'l2' }]);
+  await t.page.click('.scheduled-item:nth-child(2) [aria-label="Change the time"]');
+  await t.page.waitForSelector('.scheduled-move .when-menu');
+  // The menu opens out of the list and is not cut off by it: its first entry can really be clicked.
+  const reachable = await t.page.evaluate(() => {
+    const item = document.querySelector('.scheduled-move .when-menu .menu-item');
+    const r = item.getBoundingClientRect();
+    return item.contains(document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2));
+  });
+  assert.ok(reachable, 'the menu is not clipped by the list');
+  await t.shot('26b-scheduled-move-dark');
+  await t.clearPosted();
+  const moved = Date.now();
+  await t.page.$$eval('.scheduled-move .when-menu .menu-item', (els) => els.find((e) => e.textContent.includes('In 1 hour')).click());
+  const [move] = await t.posted('scheduledReschedule');
+  assert.equal(move.id, 'l2');
+  assert.ok(Math.abs(move.at - (moved + 3600_000)) < 10_000);
+  // The session list marks conversations with a message waiting.
+  await t.page.click('.session-btn');
+  await t.page.waitForSelector('.sheet .row.session');
+  assert.equal(await t.page.$$eval('.row.session .row-clock', (els) => els.length), 1);
+  assert.ok(await t.page.$('.row.session.active .row-clock'));
+  // An edited message comes back into the box (the host sends its text).
+  await t.page.keyboard.press('Escape');
+  await t.host({ type: 'insertText', text: 'run the tests again' });
+  await t.page.waitForFunction(() => document.querySelector('.input-box textarea').value.includes('run the tests again'));
+  // Nothing scheduled: no list.
+  await t.host({ type: 'patch', patch: { scheduled: [] } });
+  await t.page.waitForFunction(() => !document.querySelector('.scheduled'));
+  assert.deepEqual(t.consoleErrors, []);
+  await t.page.close();
+});
+
+await test('html previews: drawn in the chat, without scripts, forms or anything that leaves their box', async () => {
+  const t = await open('dark', 440, 820);
+  await t.page.evaluate(() => (window.__pwned = 0));
+  const html = [
+    '<style>body { font-family: serif } .kpi { display: flex; gap: 8px } .kpi > div { padding: 6px 10px; border: 1px solid var(--vscode-widget-border) } @import url("https://evil.example/x.css"); .bg { background: url(https://evil.example/pixel.png) } .cover { position: fixed; inset: 0; background: red }</style>',
+    '<h2>Build times</h2>',
+    '<div class="kpi"><div><b>41 s</b><br>unit</div><div><b>3 min</b><br>e2e</div></div>',
+    '<svg viewBox="0 0 120 40" width="100%"><rect x="0" y="10" width="80" height="12" fill="var(--vscode-charts-blue, #3794ff)"/><script>window.__pwned = 1</script></svg>',
+    '<table><tr><th>Suite</th><th>Time</th></tr><tr><td>unit</td><td>41 s</td></tr></table>',
+    '<details><summary>More</summary><p>Hidden detail</p></details>',
+    '<img src="https://evil.example/track.png" onerror="window.__pwned = 2"><img src="x" onerror="window.__pwned = 3">',
+    '<form action="https://evil.example"><input name="q"><button>Go</button></form>',
+    '<a href="https://example.com" onclick="window.__pwned = 4">a link</a>',
+    '<script>window.__pwned = 5</script><iframe src="https://evil.example"></iframe>',
+    '<div class="cover">covering everything</div>',
+  ].join('\n');
+  const reply = (text, extra = {}) => ({ id: 'pv', sessionId: 'ses_1', role: 'assistant', createdAt: Date.now(), completedAt: Date.now(), parts: [{ id: 'pvt', type: 'text', text }], ...extra });
+  const ask = { id: 'pu', sessionId: 'ses_1', role: 'user', createdAt: Date.now() - 10, parts: [{ id: 'put', type: 'text', text: 'chart the build times\n\n<!-- opencode-hub: html-preview -->\nPresent the answer as a visual. Reply with one short sentence…' }] };
+  const requests = [];
+  t.page.on('request', (r) => requests.push(r.url()));
+
+  // While the block is still being written it is plain code: no half-drawn page.
+  await t.host({ type: 'state', state: { ...conversation, activity: 'busy', messages: [ask, reply('Here it is:\n\n```html-preview\n' + html.slice(0, 200), { completedAt: undefined })] } });
+  await t.page.waitForSelector('[data-message-id="pv"] .code');
+  assert.equal(await t.page.$('[data-message-id="pv"] .preview-host'), null);
+  // The request shows what the user typed, with a tag instead of the instructions the chat added.
+  assert.equal(await t.page.$eval('[data-message-id="pu"] .bubble', (el) => el.childNodes[0].textContent), 'chart the build times');
+  assert.equal(await t.text('[data-message-id="pu"] .bubble-tag'), 'HTML preview');
+
+  await t.host({ type: 'state', state: { ...conversation, messages: [ask, reply('Here it is:\n\n```html-preview\n' + html + '\n```\n\nDone.')] } });
+  await t.page.waitForSelector('[data-message-id="pv"] .code.previewing .preview-host');
+  const seen = await t.page.$eval('[data-message-id="pv"] .preview-host', (host) => {
+    const root = host.shadowRoot;
+    const q = (sel) => root.querySelectorAll(sel).length;
+    const cover = root.querySelector('.cover').getBoundingClientRect();
+    const box = host.getBoundingClientRect();
+    return {
+      title: root.querySelector('h2')?.textContent,
+      svg: q('svg rect'),
+      table: q('table td'),
+      details: q('details summary'),
+      scripts: q('script'),
+      forms: q('form, input, button, iframe'),
+      images: q('img'),
+      handlers: [...root.querySelectorAll('*')].filter((e) => [...e.attributes].some((a) => a.name.startsWith('on'))).length,
+      href: q('a[href]'),
+      css: [...root.querySelectorAll('style')].map((s) => s.textContent).join('\n'),
+      // A fixed element stays inside the preview's own box.
+      contained: cover.top >= box.top - 1 && cover.bottom <= box.bottom + 1 && cover.left >= box.left - 1 && cover.right <= box.right + 1,
+      contain: getComputedStyle(host).contain,
+      sourceHidden: getComputedStyle(host.parentElement.querySelector('pre')).display === 'none',
+    };
+  });
+  assert.equal(seen.title, 'Build times');
+  assert.ok(seen.svg === 1 && seen.table === 2 && seen.details === 1, 'HTML, inline SVG, tables and details are drawn');
+  assert.deepEqual([seen.scripts, seen.forms, seen.images, seen.handlers, seen.href], [0, 0, 0, 0, 0], 'no scripts, forms, remote images, event handlers or live links');
+  assert.ok(!/@import|evil\.example/.test(seen.css), 'nothing is imported or loaded from the network');
+  assert.match(seen.css, /\.ohp-body \{ font-family: serif \}/, "a page's body rules apply to the preview");
+  assert.ok(seen.contained, 'a fixed-position element cannot leave the preview');
+  assert.match(seen.contain, /content|layout/);
+  assert.ok(seen.sourceHidden, 'the source is tucked away');
+  // The chat's own controls are still on top and clickable.
+  const onTop = await t.page.evaluate(() => {
+    const b = document.querySelector('.input-box textarea').getBoundingClientRect();
+    return document.elementFromPoint(b.left + 5, b.top + 5)?.tagName;
+  });
+  assert.equal(onTop, 'TEXTAREA');
+  await sleep(150);
+  assert.equal(await t.page.evaluate(() => window.__pwned), 0, 'nothing in the preview ran');
+  assert.deepEqual(requests.filter((u) => u.includes('evil.example')), []);
+  await t.shot('27-html-preview-dark');
+
+  // Source and back, expand, and save as a self-contained file.
+  const act = (name) => t.page.$eval(`[data-message-id="pv"] .code [data-action="${name}"]`, (el) => el.click());
+  await act('preview');
+  assert.equal(await t.page.$eval('[data-message-id="pv"] .code', (el) => el.classList.contains('previewing')), false);
+  assert.match(await t.text('[data-message-id="pv"] .code pre'), /Build times/);
+  await act('preview');
+  assert.equal(await t.page.$eval('[data-message-id="pv"] .code', (el) => el.classList.contains('previewing')), true);
+  await act('expand');
+  assert.equal(await t.page.$eval('[data-message-id="pv"] .code', (el) => el.classList.contains('expanded')), true);
+  await t.clearPosted();
+  await act('save-html');
+  const [saved] = await t.posted('saveHtml');
+  assert.match(saved.html, /^<!DOCTYPE html>/);
+  assert.match(saved.html, /Build times/);
+  assert.ok(!/<script|evil\.example|onerror|<form/.test(saved.html), 'the saved file is the sanitized preview');
+  assert.match(saved.html, /--vscode-foreground: #cccccc/, 'with the theme colours it used written out');
+
+  // An ordinary HTML or SVG code block stays code, with a Preview button.
+  await t.host({ type: 'state', state: { ...conversation, messages: [reply('```html\n<h3 id="manual">Hello</h3>\n```\n\n```ts\nconst a = 1;\n```')] } });
+  await t.page.waitForSelector('[data-message-id="pv"] .code[data-preview="manual"]');
+  assert.equal(await t.page.$('[data-message-id="pv"] .preview-host'), null);
+  assert.equal(await t.page.$$eval('[data-message-id="pv"] [data-action="preview"]', (els) => els.length), 1, 'only the HTML block offers a preview');
+  await act('preview');
+  assert.equal(await t.page.$eval('[data-message-id="pv"] .preview-host', (h) => h.shadowRoot.querySelector('#manual').textContent), 'Hello');
+  assert.equal(await t.text('[data-message-id="pv"] .code [data-action="preview"]'), 'Source');
+
+  // Markdown's own collapsible sections work in a normal reply too.
+  await t.host({ type: 'state', state: { ...conversation, messages: [reply('<details><summary>Steps</summary>\n\nOne, two.\n\n</details>')] } });
+  await t.page.waitForSelector('[data-message-id="pv"] details summary');
+
+  // Turned off in settings: the block is shown as code.
+  await t.host({ type: 'state', state: { ...conversation, htmlPreview: false, messages: [reply('```html-preview\n<p>plain</p>\n```\n')] } });
+  await t.page.waitForSelector('[data-message-id="pv"] .code');
+  assert.equal(await t.page.$('[data-message-id="pv"] [data-preview]'), null);
+  assert.deepEqual(t.consoleErrors, []);
+  await t.page.close();
+});
+
+await test('tokens: model calls, context after a reply, and why a first request can be large', async () => {
+  const t = await open('dark', 420, 760);
+  const usage = (input, output, extra = {}) => ({ input, output, reasoning: 0, cacheRead: 0, cacheWrite: 0, cost: 0, ...extra });
+  // A Claude Code reply that took 6 model calls: the context was read 6 times, mostly from the cache.
+  const messages = [
+    { id: 'u1', sessionId: 'ses_1', role: 'user', createdAt: 1, parts: [{ id: 'u1p', type: 'text', text: 'fix it' }] },
+    { id: 'a1', sessionId: 'ses_1', role: 'assistant', createdAt: 2, completedAt: 3, model: { providerId: 'claude-code', modelId: 'claude-opus-5-5' }, usage: usage(1200, 900, { cacheRead: 310_000, cacheWrite: 52_000, cost: 0.41 }), contextTokens: 64_000, calls: 6, parts: [{ id: 'a1p', type: 'text', text: 'Fixed.' }] },
+  ];
+  const claude = { ...conversation, engine: 'claude-code', providers: [{ id: 'claude-code', name: 'Claude Code', connected: true, models: [{ providerId: 'claude-code', modelId: 'opus', name: 'Opus 5.5', contextWindow: 200_000 }] }], model: { providerId: 'claude-code', modelId: 'opus' }, messages, sessionUsage: { ...conversation.sessionUsage, engine: 'claude-code', usage: messages[1].usage } };
+  await t.host({ type: 'state', state: claude });
+  await t.page.waitForSelector('.msg.assistant .meta');
+  // The reply names the model that really answered, and keeps cache reads apart from new input.
+  assert.equal(await t.text('.msg.assistant .meta'), 'claude-opus-5-553k in310k cached900 out6 calls$0.41');
+  assert.match(await t.page.$eval('.msg.assistant .meta', (el) => el.title), /This reply took 6 model calls, and each one reads the conversation again\. Context after this reply: 64,000 tokens\./);
+  // The session total does not count the 310k that were only read back.
+  assert.equal(await t.text('.pill.session-tokens'), '54k · $0.41');
+  // The context meter shows the size of the context (64k of 200k), not six times that.
+  assert.match(await t.page.$eval('.context-meter', (e) => e.title), /^Context: about 64k of 200k tokens \(32%\)\.$/);
+  // Without a context figure, a multi-call engine's reply says nothing about the context: no meter rather than a wrong one.
+  const noContext = JSON.parse(JSON.stringify(claude));
+  delete noContext.messages[1].contextTokens;
+  await t.host({ type: 'state', state: noContext });
+  await t.page.waitForFunction(() => !document.querySelector('.context-meter'));
+
+  // opencode writes one message per model call. A first request that is already huge gets an explanation.
+  const big = [
+    { id: 'u1', sessionId: 'ses_1', role: 'user', createdAt: 1, parts: [{ id: 'u1p', type: 'text', text: 'why does this fail?' }] },
+    { id: 'b1', sessionId: 'ses_1', role: 'assistant', createdAt: 2, completedAt: 3, model: { providerId: 'anthropic', modelId: 'claude-opus-5-5' }, usage: usage(40, 1200, { cacheWrite: 361_000, cost: 1.83 }), contextTokens: 362_240, calls: 1, parts: [{ id: 'b1p', type: 'text', text: 'Because.' }] },
+    { id: 'b2', sessionId: 'ses_1', role: 'assistant', createdAt: 4, completedAt: 5, model: { providerId: 'anthropic', modelId: 'claude-opus-5-5' }, usage: usage(300, 63, { cacheRead: 362_000, cost: 0.08 }), contextTokens: 362_363, calls: 1, parts: [{ id: 'b2p', type: 'tool', tool: 'bash', callId: 'c', status: 'completed', title: 'ls', output: 'a' }] },
+  ];
+  await t.host({ type: 'state', state: { ...conversation, messages: big, usage: usageSummary, sessionUsage: { ...conversation.sessionUsage, usage: usage(340, 1263, { cacheRead: 362_000, cacheWrite: 361_000, cost: 1.91 }), messages: 2 } } });
+  await t.page.waitForSelector('[data-message-id="b2"] .meta');
+  assert.equal(await t.text('[data-message-id="b1"] .meta'), 'claude-opus-5-5361k in1.2k out$1.83');
+  // A tool step has no reply text, so it does not repeat the model's name.
+  assert.equal(await t.text('[data-message-id="b2"] .meta'), '300 in362k cached63 out$0.08');
+  await t.page.click('.usage-btn');
+  await t.page.waitForSelector('.sheet .first-request');
+  assert.match(await t.text('.sheet .first-request'), /The first request of this session already carried 362k tokens\. That is what opencode sends before your message: its instructions, your project's instruction files \(such as AGENTS\.md or CLAUDE\.md\), the definition of every tool, the tools of 1 connected MCP server included, and anything you attached\..*Turning off MCP servers you do not need here/);
+  await t.shot('28-usage-first-request-dark');
+  // An ordinary first request gets no such note.
+  await t.host({ type: 'state', state: { ...conversation, usage: usageSummary } });
+  await t.page.waitForFunction(() => !document.querySelector('.sheet .first-request'));
+  assert.deepEqual(t.consoleErrors, []);
+  await t.page.close();
 });
 
 await browser.close();

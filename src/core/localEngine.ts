@@ -110,6 +110,17 @@ export class AssistantWriter {
   get usageKnown(): boolean {
     return this.hasUsage;
   }
+
+  /** Size of the model's context after the last model call of this turn, and how many calls the turn took. */
+  context: { tokens: number; calls: number } | undefined;
+
+  /**
+   * Record one model call: `tokens` is what it read (fresh, cached and newly cached input)
+   * plus what it wrote. The last call's size is the context the next message starts from.
+   */
+  modelCall(tokens: number): void {
+    this.context = { tokens: Math.max(0, Math.round(tokens)), calls: (this.context?.calls ?? 0) + 1 };
+  }
 }
 
 export interface Turn {
@@ -341,6 +352,10 @@ export abstract class LocalEngine implements Engine {
             if (cost > 0) usage = { ...usage, cost };
           }
           assistantMessage.usage = usage;
+        }
+        if (writer.context && writer.context.tokens > 0) {
+          assistantMessage.contextTokens = writer.context.tokens;
+          assistantMessage.calls = writer.context.calls;
         }
         session.info = { ...session.info, updatedAt: assistantMessage.completedAt };
         await save();

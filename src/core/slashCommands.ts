@@ -25,6 +25,8 @@ export const BUILTIN_COMMANDS: SlashCommand[] = [
   { name: 'ask', description: 'Ask mode: approve tool calls, commands and edits yourself', source: 'builtin' },
   { name: 'login', description: 'Sign in with your Claude / ChatGPT account, or use an API key', source: 'builtin' },
   { name: 'stop', description: 'Stop the current response', source: 'builtin' },
+  { name: 'preview', description: 'Ask for a visual answer (report, chart, diagram, mock-up) drawn in the chat', source: 'builtin', argumentHint: '<request>' },
+  { name: 'later', description: 'Send a message later: at a time, after a delay, or when this reply is done', source: 'builtin', argumentHint: '<30m|14:30|tomorrow 9am|next> <message>' },
   { name: 'avatar', description: 'Show, hide or restyle the 3D companion', source: 'builtin', argumentHint: '[on|off|buddy|dots]' },
   { name: 'move', description: 'Dock the chat left, right, or open it as an editor tab', source: 'builtin', argumentHint: '[left|right|editor]' },
   { name: 'zoom', description: 'Make the chat text larger or smaller', source: 'builtin', argumentHint: '[in|out|reset|120%]' },
